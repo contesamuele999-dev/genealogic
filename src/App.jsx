@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Network, Plus, ShieldAlert, LogIn, LogOut, Settings, Upload, AlertCircle } from 'lucide-react';
+import { Network, Plus, ShieldAlert, LogIn, LogOut, Settings, Upload, AlertCircle, Cake } from 'lucide-react';
 import { storage } from './services/storage';
 import { generateUUID } from './services/xmindParser';
+import { getUpcomingBirthdays } from './services/birthdayService';
 
 // Componenti
 import GenealogyTree from './components/GenealogyTree';
@@ -11,6 +12,7 @@ import ImportExport from './components/ImportExport';
 import AuthModal from './components/AuthModal';
 import AdminPanel from './components/AdminPanel';
 import TreeSettingsModal from './components/TreeSettingsModal';
+import BirthdayModal from './components/BirthdayModal';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
@@ -24,12 +26,13 @@ export default function App() {
   const [selectedPerson, setSelectedPerson] = useState(null);
   const [highlightedPersonId, setHighlightedPersonId] = useState(null);
   const [relativeToAdd, setRelativeToAdd] = useState(null); // { person, relation: 'parent'|'partner'|'child' }
-  
+
   // Modali aperti
   const [showAuth, setShowAuth] = useState(false);
   const [showAdmin, setShowAdmin] = useState(false);
   const [showTreeSettings, setShowTreeSettings] = useState(false);
   const [showImportExport, setShowImportExport] = useState(false);
+  const [showBirthdays, setShowBirthdays] = useState(false);
 
   // Carica i dati utente
   const loadUser = async () => {
@@ -305,6 +308,22 @@ export default function App() {
 
         {/* Azioni Utente e Pannelli */}
         <div className="header-actions">
+          {activeTreeId && (
+            <button
+              className="btn btn-secondary relative flex-align gap-6"
+              onClick={() => setShowBirthdays(true)}
+              title="Compleanni Parenti in Vita"
+            >
+              <Cake size={16} className="text-amber" />
+              <span>Compleanni</span>
+              {getUpcomingBirthdays(people, 60).length > 0 && (
+                <span className="badge-count bg-amber text-inverse font-bold">
+                  {getUpcomingBirthdays(people, 60).length}
+                </span>
+              )}
+            </button>
+          )}
+
           {activeTreeId && canEdit && (
             <>
               <button className="btn btn-primary" onClick={() => handleAddRelativeTrigger(null, 'free')} title="Aggiungi Capostipite">
@@ -437,6 +456,20 @@ export default function App() {
           treeId={activeTreeId}
           onClose={() => setShowImportExport(false)}
           onImportComplete={handleImportComplete}
+        />
+      )}
+
+      {showBirthdays && (
+        <BirthdayModal
+          isOpen={showBirthdays}
+          onClose={() => setShowBirthdays(false)}
+          people={people}
+          treeName={activeTree?.name || 'Albero Genealogico'}
+          onSelectPerson={(id) => {
+            setHighlightedPersonId(id);
+            const p = people.find(item => item.id === id);
+            if (p) setSelectedPerson(p);
+          }}
         />
       )}
     </div>

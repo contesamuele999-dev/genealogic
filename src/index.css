@@ -301,6 +301,11 @@ button, input, select, textarea {
   transition: all var(--transition-slow);
 }
 
+.canvas-wrapper.is-dragging .tree-node-wrapper,
+.canvas-wrapper.is-dragging .connection-line {
+  transition: none !important;
+}
+
 /* Node card design */
 .node-card {
   width: 190px;

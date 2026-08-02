@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import { ZoomIn, ZoomOut, Maximize, RefreshCw, Plus, UserPlus, Trash2 } from 'lucide-react';
 import NodeCard from './NodeCard';
 
@@ -19,7 +19,8 @@ export default function GenealogyTree({
 }) {
   const [positions, setPositions] = useState({});
   const [draggedNode, setDraggedNode] = useState(null);
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  // Stato del drag corrente (ref: non provoca re-render e non è soggetto a closure stale)
+  const dragRef = useRef(null);
   // Memoria posizioni manuali (drag)
   const manualPositionsRef = useRef({});
   // Nodi selezionati per multi-select
@@ -33,6 +34,8 @@ export default function GenealogyTree({
 
   const canvasRef = useRef(null);
   const wrapperRef = useRef(null);
+  const hasCenteredRef = useRef(false);
+  const [layoutVersion, setLayoutVersion] = useState(0);
 
   // Hash per rilevare cambiamenti reali nei dati
   const dataHash = useMemo(() => {
@@ -148,23 +151,68 @@ export default function GenealogyTree({
       }
     });
 
-    // Posiziona i nodi generazione per generazione
-    Object.keys(genGroups).forEach(genStr => {
-      const gen = Number(genStr);
-      const pIds = genGroups[gen];
+    // Posiziona i nodi generazione per generazione (raggruppando i fratelli assieme e distanziando i genitori in base allo spazio richiesto dai figli)
+    const sortedGenKeys = Object.keys(genGroups).map(Number).sort((a, b) => a - b);
 
-      // Divide in coppie e singoli in questa generazione
-      const genElements = []; // conterrà oggetti { type: 'couple'|'single', ids: [...] }
+    sortedGenKeys.forEach(gen => {
+      const rawPIds = genGroups[gen];
+
+      // Raggruppa i membri della generazione per unione genitoriale comune (fratelli assieme)
+      const familyGroups = [];
+      const groupMap = new Map();
+      const orphanIds = [];
+
+      rawPIds.forEach(pid => {
+        const parentUnion = unions.find(u => Array.isArray(u.children_ids) && u.children_ids.includes(pid));
+        if (parentUnion) {
+          if (!groupMap.has(parentUnion.id)) {
+            const groupObj = { parentUnionId: parentUnion.id, parentUnion, pIds: [] };
+            groupMap.set(parentUnion.id, groupObj);
+            familyGroups.push(groupObj);
+          }
+          groupMap.get(parentUnion.id).pIds.push(pid);
+        } else {
+          orphanIds.push(pid);
+        }
+      });
+
+      // Ordina i gruppi di fratelli in base al baricentro X dei genitori (se già posizionati al livello precedente)
+      familyGroups.sort((a, b) => {
+        const uA = a.parentUnion;
+        const uB = b.parentUnion;
+        const p1X_a = uA.partner1_id && newPositions[uA.partner1_id] ? newPositions[uA.partner1_id].x : 0;
+        const p2X_a = uA.partner2_id && newPositions[uA.partner2_id] ? newPositions[uA.partner2_id].x : p1X_a;
+        const centerA = (p1X_a + p2X_a) / 2;
+
+        const p1X_b = uB.partner1_id && newPositions[uB.partner1_id] ? newPositions[uB.partner1_id].x : 0;
+        const p2X_b = uB.partner2_id && newPositions[uB.partner2_id] ? newPositions[uB.partner2_id].x : p1X_b;
+        const centerB = (p1X_b + p2X_b) / 2;
+
+        return centerA - centerB;
+      });
+
+      // Ricostruisci la lista ordinata di pIds mantenendo i fratelli contigui
+      const sortedPIds = [];
+      familyGroups.forEach(grp => {
+        sortedPIds.push(...grp.pIds);
+      });
+      sortedPIds.push(...orphanIds);
+
+      // Divide in coppie e singoli in questa generazione (rispettando l'ordine dei fratelli)
+      const genElements = [];
       const addedToGen = new Set();
 
-      pIds.forEach(pid => {
+      sortedPIds.forEach(pid => {
         if (addedToGen.has(pid)) return;
 
-        const couple = couples.find(c => c.p1 === pid || c.p2 === pid);
+        const couple = couples.find(c =>
+          (c.p1 === pid && !addedToGen.has(c.p2)) ||
+          (c.p2 === pid && !addedToGen.has(c.p1))
+        );
+
         if (couple) {
           const partnerId = couple.p1 === pid ? couple.p2 : couple.p1;
-          // Assicura che anche il partner sia in questa generazione
-          if (pIds.includes(partnerId)) {
+          if (sortedPIds.includes(partnerId) && !addedToGen.has(partnerId)) {
             genElements.push({
               type: 'couple',
               ids: [couple.p1, couple.p2],
@@ -182,58 +230,85 @@ export default function GenealogyTree({
         }
       });
 
-      // Calcola larghezza totale occupata da questa generazione
-      let totalWidth = 0;
-      const elementWidths = genElements.map(el => {
+      // Funzione per identificare i figli di un elemento della generazione
+      const getElementChildrenIds = (el) => {
         if (el.type === 'couple') {
-          return CARD_WIDTH * 2 + HORIZONTAL_GAP;
+          const u = unions.find(x => x.id === el.unionId);
+          return u && Array.isArray(u.children_ids) ? u.children_ids : [];
         } else {
-          return CARD_WIDTH;
+          const uList = unions.filter(x => x.partner1_id === el.id || x.partner2_id === el.id);
+          const cIds = [];
+          uList.forEach(u => {
+            if (Array.isArray(u.children_ids)) cIds.push(...u.children_ids);
+          });
+          return cIds;
         }
+      };
+
+      // Calcola la larghezza dinamica riservata a ciascun elemento in base allo spazio richiesto dai suoi figli
+      const elementWidths = genElements.map(el => {
+        const selfW = el.type === 'couple' ? (CARD_WIDTH * 2 + HORIZONTAL_GAP) : CARD_WIDTH;
+        const childIds = getElementChildrenIds(el);
+        if (childIds.length > 0) {
+          let childrenW = 0;
+          childIds.forEach(cId => {
+            const isCouple = couples.some(c => c.p1 === cId || c.p2 === cId);
+            childrenW += isCouple ? (CARD_WIDTH * 2 + HORIZONTAL_GAP) : CARD_WIDTH;
+          });
+          childrenW += (childIds.length - 1) * HORIZONTAL_GAP;
+          return Math.max(selfW, childrenW);
+        }
+        return selfW;
       });
 
-      totalWidth = elementWidths.reduce((a, b) => a + b, 0) + (genElements.length - 1) * HORIZONTAL_GAP;
+      // Calcola larghezza totale occupata da questa generazione considerando lo spazio richiesto dalle sotto-strutture dei figli
+      let totalWidth = elementWidths.reduce((a, b) => a + b, 0) + (genElements.length - 1) * HORIZONTAL_GAP;
 
-      // Assegna posizioni X centered
+      // Assegna posizioni X al centro dello spazio riservato (Slot) a ciascun elemento e ai suoi figli
       let currentX = -totalWidth / 2;
       const y = gen * VERTICAL_GAP + 100;
 
       genElements.forEach((el, index) => {
-        const w = elementWidths[index];
-        const centerOffset = w / 2;
+        const allocatedW = elementWidths[index];
+        const slotCenterX = currentX + allocatedW / 2;
 
         if (el.type === 'couple') {
-          // Preserva posizioni manuali se esistono
           const savedP1 = manualPositionsRef.current[el.ids[0]];
           const savedP2 = manualPositionsRef.current[el.ids[1]];
-          const p1X = savedP1 ? savedP1.x : currentX + CARD_WIDTH / 2;
-          const p2X = savedP2 ? savedP2.x : currentX + CARD_WIDTH + HORIZONTAL_GAP + CARD_WIDTH / 2;
+          const p1X = savedP1 ? savedP1.x : slotCenterX - (CARD_WIDTH + HORIZONTAL_GAP) / 2;
+          const p2X = savedP2 ? savedP2.x : slotCenterX + (CARD_WIDTH + HORIZONTAL_GAP) / 2;
 
           newPositions[el.ids[0]] = { x: p1X, y: savedP1?.y ?? y };
           newPositions[el.ids[1]] = { x: p2X, y: savedP2?.y ?? y };
-          // Salva anche la posizione del connettore della coppia
-          newPositions[`union_${el.unionId}`] = { x: currentX + CARD_WIDTH + HORIZONTAL_GAP / 2, y };
+          newPositions[`union_${el.unionId}`] = { x: slotCenterX, y };
         } else {
-          // Preserva posizione manuale se esiste
           const saved = manualPositionsRef.current[el.id];
           newPositions[el.id] = {
-            x: saved ? saved.x : currentX + centerOffset,
+            x: saved ? saved.x : slotCenterX,
             y: saved ? saved.y : y
           };
         }
 
-        currentX += w + HORIZONTAL_GAP;
+        currentX += allocatedW + HORIZONTAL_GAP;
       });
     });
 
     setPositions(newPositions);
 
-    // Centra l'albero sullo schermo al caricamento iniziale
-    if (wrapperRef.current) {
+    // Centra l'albero sullo schermo SOLO al primo caricamento:
+    // ricentrare ad ogni modifica dei dati faceva "saltare" la visuale.
+    if (!hasCenteredRef.current && wrapperRef.current) {
+      hasCenteredRef.current = true;
       const wWidth = wrapperRef.current.clientWidth;
       setPan({ x: wWidth / 2, y: 80 });
     }
-  }, [dataHash]);
+  }, [dataHash, layoutVersion]);
+
+  // Mantiene le posizioni aggiornate in un ref (evita dipendenze che rilanciano effetti durante il drag)
+  const positionsRef = useRef(positions);
+  useEffect(() => {
+    positionsRef.current = positions;
+  }, [positions]);
 
   // Gestione del Pan (trascinamento dello sfondo)
   const handleMouseDown = (e) => {
@@ -242,53 +317,80 @@ export default function GenealogyTree({
     setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
   };
 
+  const hasDraggedRef = useRef(false);
+
+  // Soglia (in pixel schermo) oltre la quale il movimento è considerato un drag e non un click
+  const DRAG_THRESHOLD = 4;
+
   const handleMouseMove = (e) => {
     if (isPanning) {
       setPan({
         x: e.clientX - panStart.x,
         y: e.clientY - panStart.y
       });
-    } else if (draggedNode) {
-      // Drag di una card singola per riposizionamento manuale
-      const rect = canvasRef.current.getBoundingClientRect();
-      // Calcola coordinate relative scalate
-      const x = (e.clientX - rect.left - pan.x) / zoom;
-      const y = (e.clientY - rect.top - pan.y) / zoom;
-
-      // Salva anche in manualPositionsRef per preservare dopo il layout
-      manualPositionsRef.current[draggedNode] = {
-        x: x - dragOffset.x,
-        y: y - dragOffset.y
-      };
-
-      setPositions(prev => ({
-        ...prev,
-        [draggedNode]: manualPositionsRef.current[draggedNode]
-      }));
+      return;
     }
+
+    const drag = dragRef.current;
+    if (!drag) return;
+
+    // Spostamento calcolato in DELTA rispetto al punto di partenza:
+    // non dipende né dal riquadro del canvas né dal pan corrente, quindi il nodo
+    // segue il mouse 1:1 e non "schizza" via se la visuale cambia.
+    const dxScreen = e.clientX - drag.startClientX;
+    const dyScreen = e.clientY - drag.startClientY;
+
+    if (!drag.moved) {
+      if (Math.abs(dxScreen) < DRAG_THRESHOLD && Math.abs(dyScreen) < DRAG_THRESHOLD) return;
+      drag.moved = true;
+      hasDraggedRef.current = true;
+    }
+
+    const newX = drag.origX + dxScreen / zoom;
+    const newY = drag.origY + dyScreen / zoom;
+
+    manualPositionsRef.current[drag.id] = { x: newX, y: newY };
+
+    setPositions(prev => ({
+      ...prev,
+      [drag.id]: { x: newX, y: newY }
+    }));
   };
 
   const handleMouseUp = () => {
     setIsPanning(false);
+    dragRef.current = null;
     setDraggedNode(null);
   };
 
-  // Zoom con la rotella
-  const handleWheel = (e) => {
-    e.preventDefault();
-    const zoomFactor = 1.1;
-    let newZoom = zoom;
-    if (e.deltaY < 0) {
-      newZoom = Math.min(zoom * zoomFactor, 2.0);
-    } else {
-      newZoom = Math.max(zoom / zoomFactor, 0.3);
-    }
-    setZoom(newZoom);
+  // Applica uno zoom mantenendo fisso il punto (cx, cy) espresso in coordinate del wrapper
+  const applyZoom = (nextZoomRaw, cx, cy) => {
+    const nextZoom = Math.min(2.0, Math.max(0.3, nextZoomRaw));
+    if (nextZoom === zoom) return;
+    const k = nextZoom / zoom;
+    setPan(p => ({
+      x: cx - (cx - p.x) * k,
+      y: cy - (cy - p.y) * k
+    }));
+    setZoom(nextZoom);
   };
 
-  // Funzioni HUD
-  const zoomIn = () => setZoom(z => Math.min(z * 1.2, 2.0));
-  const zoomOut = () => setZoom(z => Math.max(z / 1.2, 0.3));
+  // Zoom con la rotella, ancorato alla posizione del cursore
+  const handleWheel = (e) => {
+    e.preventDefault();
+    const rect = wrapperRef.current.getBoundingClientRect();
+    const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+    applyZoom(zoom * factor, e.clientX - rect.left, e.clientY - rect.top);
+  };
+
+  // Funzioni HUD (zoom ancorato al centro della vista)
+  const zoomAtCenter = (factor) => {
+    const el = wrapperRef.current;
+    if (!el) return;
+    applyZoom(zoom * factor, el.clientWidth / 2, el.clientHeight / 2);
+  };
+  const zoomIn = () => zoomAtCenter(1.2);
+  const zoomOut = () => zoomAtCenter(1 / 1.2);
   const resetPanZoom = () => {
     if (wrapperRef.current) {
       const wWidth = wrapperRef.current.clientWidth;
@@ -296,53 +398,95 @@ export default function GenealogyTree({
       setZoom(0.85);
     }
   };
-
-  // Inizia il drag di un nodo
-  const handleNodeDragStart = (personId, e) => {
-    if (!canEdit) return;
-    e.stopPropagation();
-    const rect = e.currentTarget.getBoundingClientRect();
-    const canvasRect = canvasRef.current.getBoundingClientRect();
-
-    // Calcola il punto di click relativo all'interno del nodo
-    const clickX = (e.clientX - rect.left) / zoom;
-    const clickY = (e.clientY - rect.top) / zoom;
-
-    setDraggedNode(personId);
-    setDragOffset({ x: clickX - CARD_WIDTH/2, y: clickY - CARD_HEIGHT/2 });
+  const resetLayout = () => {
+    manualPositionsRef.current = {};
+    // Forza il ricalcolo del layout: senza questo i nodi restavano a 0,0
+    // perché l'effetto dipende solo da dataHash (invariato).
+    setLayoutVersion(v => v + 1);
+    if (wrapperRef.current) {
+      const wWidth = wrapperRef.current.clientWidth;
+      setPan({ x: wWidth / 2, y: 80 });
+      setZoom(0.85);
+    }
   };
 
-  // Gestione click sui nodi per selezione multipla con Shift
-  const handleNodeClick = (personId, e) => {
+  // Mousedown su un nodo: gestisce selezione multipla (Shift) e avvio del drag.
+  // Un solo handler evita che il pan dello sfondo parta contemporaneamente al drag della card.
+  const handleNodeMouseDown = (personId, e) => {
+    if (e.button !== 0) return;
+    // Non interferire con i pulsanti interni alla card (quick add, menu...)
+    if (e.target.closest('button')) return;
+
     if (e.shiftKey && canEdit) {
-      // selezione multipla con shift
       e.stopPropagation();
+      e.preventDefault();
+      hasDraggedRef.current = true; // impedisce l'apertura della scheda al click
       setSelectedPeople(prev => {
         const next = new Set(prev);
-        if (next.has(personId)) {
-          next.delete(personId);
-        } else {
-          next.add(personId);
-        }
+        if (next.has(personId)) next.delete(personId);
+        else next.add(personId);
         return next;
       });
+      return;
     }
+
+    if (!canEdit) return;
+
+    e.stopPropagation();
+
+    hasDraggedRef.current = false;
+
+    const currentPos = positionsRef.current[personId] || { x: 0, y: 0 };
+    dragRef.current = {
+      id: personId,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      origX: currentPos.x,
+      origY: currentPos.y,
+      moved: false
+    };
+    setDraggedNode(personId);
   };
 
-  // Effetto per centrare un nodo evidenziato (es. dai risultati della ricerca)
+  // Effetto per centrare un nodo evidenziato (es. dai risultati della ricerca).
+  // Dipende SOLO da highlightedPersonId: dipendere da `positions` faceva ricentrare
+  // la visuale ad ogni pixel di trascinamento.
   useEffect(() => {
-    if (highlightedPersonId && positions[highlightedPersonId] && wrapperRef.current) {
-      const nodePos = positions[highlightedPersonId];
-      const wWidth = wrapperRef.current.clientWidth;
-      const wHeight = wrapperRef.current.clientHeight;
-      
-      // Sposta il pan in modo che il nodo sia al centro dello schermo
-      setPan({
-        x: wWidth / 2 - nodePos.x * zoom,
-        y: wHeight / 2 - nodePos.y * zoom
-      });
-    }
-  }, [highlightedPersonId, positions]);
+    if (!highlightedPersonId) return;
+    const pos = positionsRef.current[highlightedPersonId];
+    if (!pos || !wrapperRef.current) return;
+
+    const wWidth = wrapperRef.current.clientWidth;
+    const wHeight = wrapperRef.current.clientHeight;
+    setPan({
+      x: wWidth / 2 - pos.x * zoom,
+      y: wHeight / 2 - pos.y * zoom
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightedPersonId, positions[highlightedPersonId] ? 1 : 0]);
+
+  // Altezza reale delle card (varia se ci sono badge Salute/Note):
+  // usare un valore fisso lasciava un piccolo distacco fra linea e scheda.
+  const cardElsRef = useRef({});
+  const [cardHeights, setCardHeights] = useState({});
+
+  useLayoutEffect(() => {
+    const measured = {};
+    Object.entries(cardElsRef.current).forEach(([id, el]) => {
+      const h = el && el.offsetHeight;
+      if (h) measured[id] = h;
+    });
+    setCardHeights(prev => {
+      const prevKeys = Object.keys(prev);
+      const nextKeys = Object.keys(measured);
+      const same =
+        prevKeys.length === nextKeys.length &&
+        nextKeys.every(k => prev[k] === measured[k]);
+      return same ? prev : measured;
+    });
+  }, [dataHash]);
+
+  const halfHeight = (personId) => (cardHeights[personId] || CARD_HEIGHT) / 2;
 
   // Genera linee di collegamento SVG
   const renderConnections = () => {
@@ -370,37 +514,52 @@ export default function GenealogyTree({
 
       // 2. Linea dai genitori ai figli
       if (Array.isArray(u.children_ids) && u.children_ids.length > 0) {
-        // Punto di partenza (connettore di coppia o centro di p1 se single parent)
-        const startX = p2 ? (p1.x + p2.x) / 2 : p1.x;
-        const startY = p1.y;
+        // Figli effettivamente presenti sul canvas
+        const childEntries = u.children_ids
+          .map(childId => ({ childId, pos: positions[childId] }))
+          .filter(c => c.pos);
 
-        // Scendi a metà strada tra le generazioni
-        const midY = startY + VERTICAL_GAP / 2;
+        if (childEntries.length === 0) return;
+
+        // Punto di partenza: connettore della coppia (o centro di p1 se genitore singolo).
+        // Parte dal BORDO INFERIORE della card più bassa fra i due partner, così la linea
+        // resta agganciata anche se i genitori vengono trascinati a quote diverse.
+        const startX = p2 ? (p1.x + p2.x) / 2 : p1.x;
+        const parentBottomY = p2
+          ? Math.max(p1.y + halfHeight(u.partner1_id), p2.y + halfHeight(u.partner2_id))
+          : p1.y + halfHeight(u.partner1_id);
+
+        // Bordo superiore del figlio più in alto
+        const minChildTopY = Math.min(...childEntries.map(c => c.pos.y - halfHeight(c.childId)));
+
+        // Altezza della "sbarra" orizzontale: sempre a metà fra genitori e figli.
+        // Essendo calcolata dalle posizioni REALI (non da VERTICAL_GAP fisso), gli estremi
+        // del gomito restano attaccati alle card durante il trascinamento.
+        const busY = parentBottomY + (minChildTopY - parentBottomY) / 2;
 
         const isParentHighlighted = highlightedPersonId === u.partner1_id || (p2 && highlightedPersonId === u.partner2_id);
 
-        // Disegna linea verticale principale verso il basso
+        // Tratto verticale che scende dai genitori fino alla sbarra
         lines.push(
           <path
             key={`parent-down-${u.id}`}
-            d={`M ${startX} ${startY} L ${startX} ${midY}`}
+            d={`M ${startX} ${parentBottomY} L ${startX} ${busY}`}
             className={`connection-line ${isParentHighlighted ? 'highlighted' : ''}`}
           />
         );
 
-        // Disegna linee verso ciascun figlio
-        u.children_ids.forEach(childId => {
-          const childPos = positions[childId];
-          if (!childPos) return;
-
+        // Un gomito completo per ciascun figlio: sbarra -> colonna del figlio -> bordo del figlio
+        childEntries.forEach(({ childId, pos: childPos }) => {
           const isChildHighlighted = highlightedPersonId === childId;
           const isPathHighlighted = isParentHighlighted || isChildHighlighted;
 
-          // Disegna gomito (elbow path): da midY all'asse X del figlio, poi giù al figlio
+          // Se il figlio è stato trascinato sopra i genitori, ci si aggancia al suo bordo inferiore
+          const childEdgeY = childPos.y + (childPos.y >= busY ? -halfHeight(childId) : halfHeight(childId));
+
           lines.push(
             <path
               key={`child-link-${u.id}-${childId}`}
-              d={`M ${startX} ${midY} L ${childPos.x} ${midY} L ${childPos.x} ${childPos.y - CARD_HEIGHT/2}`}
+              d={`M ${startX} ${busY} L ${childPos.x} ${busY} L ${childPos.x} ${childEdgeY}`}
               className={`connection-line ${isPathHighlighted ? 'highlighted' : ''}`}
             />
           );
@@ -414,7 +573,7 @@ export default function GenealogyTree({
   return (
     <div
       ref={wrapperRef}
-      className="canvas-wrapper"
+      className={`canvas-wrapper ${draggedNode || isPanning ? 'is-dragging' : ''}`}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
@@ -432,6 +591,9 @@ export default function GenealogyTree({
           </button>
           <button className="btn-icon" onClick={resetPanZoom} title="Centra Albero">
             <Maximize size={18} />
+          </button>
+          <button className="btn-icon" onClick={resetLayout} title="Ripristina Layout Automatico">
+            <RefreshCw size={18} />
           </button>
           {canEdit && selectedPeople.size > 0 && (
             <button className="btn-icon btn-danger" onClick={() => {
@@ -466,18 +628,25 @@ export default function GenealogyTree({
             return (
               <div
                 key={person.id}
+                ref={(el) => {
+                  if (el) cardElsRef.current[person.id] = el;
+                  else delete cardElsRef.current[person.id];
+                }}
                 className={`tree-node-wrapper ${isSelected ? 'selected' : ''}`}
                 style={{
                   left: `${pos.x}px`,
                   top: `${pos.y}px`,
                 }}
-                onMouseDown={(e) => handleNodeClick(person.id, e)}
-                onMouseDownCapture={(e) => handleNodeDragStart(person.id, e)}
+                onMouseDown={(e) => handleNodeMouseDown(person.id, e)}
               >
                 <NodeCard
                   person={person}
                   highlighted={highlightedPersonId === person.id}
-                  onClick={() => onSelectPerson(person)}
+                  onClick={() => {
+                    if (!hasDraggedRef.current) {
+                      onSelectPerson(person);
+                    }
+                  }}
                   onAddRelative={(relation) => onAddRelative(person, relation)}
                   canEdit={canEdit}
                 />

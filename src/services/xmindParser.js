@@ -20,7 +20,15 @@ export function generateUUID() {
 function parseName(nameStr) {
   if (!nameStr) return { firstName: 'Sconosciuto', lastName: '' };
 
-  const cleanName = nameStr.replace(/\(.*?\)/g, '').replace(/\[.*?\]/g, '').trim();
+  const cleanName = nameStr
+    .replace(/\(.*?\)/g, '')
+    .replace(/\[.*?\]/g, '')
+    // rimuove separatori/punteggiatura pendenti a inizio o fine ("Mario Rossi -" -> "Mario Rossi")
+    .replace(/^[\s\-–—+&=|,.:;]+/, '')
+    .replace(/[\s\-–—+&=|,.:;]+$/, '')
+    .trim();
+
+  if (!cleanName) return { firstName: 'Sconosciuto', lastName: '' };
 
   if (cleanName.includes(',')) {
     const parts = cleanName.split(',');
@@ -190,48 +198,116 @@ function parseMetadata(str) {
 }
 
 /**
- * Parsea una singola riga o nodo che può contenere una coppia separata da '+' o '&' o '-'
+ * Sostituisce il contenuto di parentesi tonde e quadre con dei segnaposto della stessa
+ * lunghezza. Serve a cercare i separatori di coppia SOLO nel testo "reale", ignorando
+ * trattini che fanno parte di date come "(22/05/1862 - 11/02/1909)" o "(1920-1990)".
+ * Gli indici restano allineati alla stringa originale.
  */
-function parseNodeContent(text, treeId) {
-  if (!text) return null;
+function maskBracketed(text) {
+  const chars = text.split('');
+  let depthRound = 0;
+  let depthSquare = 0;
 
-  // Riconosce coppie separate da +, & o -
-  // Nota: il separatore '-' deve essere l'ultimo controllo perché potrebbe essere parte di un nome
-  let partnerSeparator = text.includes('+') ? '+' : (text.includes('&') ? '&' : null);
+  for (let i = 0; i < chars.length; i++) {
+    const c = chars[i];
+    if (c === '(') { depthRound++; chars[i] = ''; continue; }
+    if (c === '[') { depthSquare++; chars[i] = ''; continue; }
+    if (c === ')') { if (depthRound > 0) depthRound--; chars[i] = ''; continue; }
+    if (c === ']') { if (depthSquare > 0) depthSquare--; chars[i] = ''; continue; }
+    if (depthRound > 0 || depthSquare > 0) chars[i] = '';
+  }
 
-  // Se non c'è + o &, prova con '-' ma assicurati che sia un separatore tra due nomi completi
-  if (!partnerSeparator && text.includes('-')) {
-    // Verifica che '-' non sia dentro una data tra parentesi
-    const parts = text.split('-');
-    if (parts.length >= 2) {
-      // Controllo che ci sia almeno un carattere dopo l'ultima '-' fuori dalle parentesi
-      const lastPart = parts[parts.length - 1].trim();
-      const hasContentAfterLastDash = lastPart.length > 0 && !lastPart.startsWith('(');
+  return chars.join('');
+}
 
-      // Se il contenuto dopo l'ultimo trattino ha senso (più di 2 caratteri, non è una data), è una coppia
-      if (hasContentAfterLastDash && !text.match(/\(\d{1,2}\/\d{1,2}\/\d{4}\s*-\s*\d{1,2}\/\d{1,2}\/\d{4}\)/)) {
-        partnerSeparator = '-';
-      }
+const hasLetters = (s) => /[\p{L}]/u.test(s || '');
+
+/**
+ * Converte i metadati (camelCase) nei campi usati dal database/app (snake_case).
+ * Senza questa conversione le date estratte dall'import venivano perse.
+ */
+function metaToPersonFields(meta) {
+  return {
+    gender: meta.gender || 'M',
+    birth_date: meta.birthDate || '',
+    death_date: meta.deathDate || '',
+    birth_place: meta.birthPlace || '',
+    illnesses: meta.illnesses || [],
+    notes: meta.notes || ''
+  };
+}
+
+/**
+ * Trova il separatore di coppia nel testo, ignorando ciò che sta tra parentesi.
+ * Ritorna { index, length } oppure null.
+ */
+function findPartnerSeparator(text) {
+  const masked = maskBracketed(text);
+
+  // 1. Separatori espliciti (simboli e parole chiave). Vince quello che compare per primo.
+  const explicitPatterns = [
+    /\s*[+&=]\s*/,
+    /\s+(?:sposato con|sposata con|coniugato con|coniugata con|in sposa a|married to)\s+/i,
+    /\s+(?:e|ed|and|m\.)\s+/i,
+    /\s*\|\s*/
+  ];
+
+  let best = null;
+  for (const re of explicitPatterns) {
+    const m = masked.match(re);
+    if (m && (best === null || m.index < best.index)) {
+      best = { index: m.index, length: m[0].length };
     }
   }
 
-  if (partnerSeparator) {
-    const parts = text.split(partnerSeparator);
-    const part1 = parts[0].trim();
-    const part2 = parts[1].trim();
+  // 2. Trattino usato come separatore: deve essere isolato da spazi (" - ", " – ", " — ")
+  //    così da non spezzare cognomi/nomi composti tipo "Jean-Pierre" o "De-Rossi".
+  const dashMatch = masked.match(/\s+[-–—]+\s+/);
+  if (dashMatch && (best === null || dashMatch.index < best.index)) {
+    best = { index: dashMatch.index, length: dashMatch[0].length };
+  }
+
+  if (!best) return null;
+
+  // Entrambe le parti devono contenere un nome vero
+  const left = text.substring(0, best.index).trim();
+  const right = text.substring(best.index + best.length).trim();
+  if (!hasLetters(left.replace(/[([].*?[)\]]/g, '')) || !hasLetters(right.replace(/[([].*?[)\]]/g, ''))) {
+    return null;
+  }
+
+  return best;
+}
+
+/**
+ * Parsea una singola riga o nodo che può contenere una coppia
+ * (separata da +, &, =, " e ", " sposato con ", " - " ecc.)
+ */
+function parseNodeContent(text, treeId, extraNotes = '') {
+  if (!text) return null;
+
+  const separator = findPartnerSeparator(text);
+
+  if (separator) {
+    const part1 = text.substring(0, separator.index).trim();
+    const part2 = text.substring(separator.index + separator.length).trim();
 
     const meta1 = parseMetadata(part1);
     const name1 = parseName(part1);
+    if (extraNotes) meta1.notes = meta1.notes ? `${meta1.notes} | ${extraNotes}` : extraNotes;
+
     const p1 = {
       id: generateUUID(),
       tree_id: treeId,
       first_name: name1.firstName,
       last_name: name1.lastName,
-      ...meta1
+      ...metaToPersonFields(meta1)
     };
 
     const meta2 = parseMetadata(part2);
     const name2 = parseName(part2);
+    if (extraNotes) meta2.notes = meta2.notes ? `${meta2.notes} | ${extraNotes}` : extraNotes;
+
     // Se il genere del partner 2 non è esplicito, usiamo l'opposto del partner 1
     if (meta2.gender === 'M' && meta1.gender === 'M') meta2.gender = 'F';
     else if (meta2.gender === 'F' && meta1.gender === 'F') meta2.gender = 'M';
@@ -241,7 +317,7 @@ function parseNodeContent(text, treeId) {
       tree_id: treeId,
       first_name: name2.firstName,
       last_name: name2.lastName || name1.lastName,
-      ...meta2
+      ...metaToPersonFields(meta2)
     };
 
     return {
@@ -252,12 +328,14 @@ function parseNodeContent(text, treeId) {
   } else {
     const meta = parseMetadata(text);
     const name = parseName(text);
+    if (extraNotes) meta.notes = meta.notes ? `${meta.notes} | ${extraNotes}` : extraNotes;
+
     const p = {
       id: generateUUID(),
       tree_id: treeId,
       first_name: name.firstName,
       last_name: name.lastName,
-      ...meta
+      ...metaToPersonFields(meta)
     };
     return {
       type: 'single',
@@ -268,6 +346,7 @@ function parseNodeContent(text, treeId) {
 
 /**
  * Parser per file .xmind (ZIP che contiene content.json)
+ * Gestisce multi-sheet, note, etichette, argomenti staccati e callout.
  */
 export async function parseXMindFile(fileBuffer, treeId) {
   const decompressed = unzipSync(new Uint8Array(fileBuffer));
@@ -291,75 +370,97 @@ export async function parseXMindFile(fileBuffer, treeId) {
   }
 
   const data = JSON.parse(contentJsonText);
-  const rootSheet = Array.isArray(data) ? data[0] : data;
-  const rootTopic = rootSheet.rootTopic;
-
-  if (!rootTopic) {
-    throw new Error('Nessun topic radice trovato nella mappa mentale');
-  }
+  const sheets = Array.isArray(data) ? data : [data];
 
   const people = [];
   const unions = [];
 
-  function traverseTopic(topic, parentUnionId = null) {
-    const title = topic.title || '';
-    if (!title.trim()) return;
+  sheets.forEach(sheet => {
+    const rootTopic = sheet.rootTopic;
+    if (!rootTopic) return;
 
-    const parsedNode = parseNodeContent(title, treeId);
-    if (!parsedNode) return;
+    function traverseTopic(topic, parentUnionId = null) {
+      const title = topic.title || '';
+      if (!title.trim()) return;
 
-    let activeUnionId = null;
-
-    if (parsedNode.type === 'couple') {
-      const { partner1, partner2 } = parsedNode;
-      people.push(partner1, partner2);
-
-      const union = {
-        id: generateUUID(),
-        tree_id: treeId,
-        partner1_id: partner1.id,
-        partner2_id: partner2.id,
-        children_ids: [],
-        type: 'relationship'
-      };
-      unions.push(union);
-      activeUnionId = union.id;
-
-      if (parentUnionId) {
-        const pUnion = unions.find(u => u.id === parentUnionId);
-        if (pUnion) pUnion.children_ids.push(partner1.id);
+      // Estrai eventuali note (plain text o html)
+      let notesText = '';
+      if (topic.notes) {
+        if (topic.notes.plain) notesText = topic.notes.plain.content || '';
+        else if (topic.notes.realhtml) notesText = (topic.notes.realhtml.content || '').replace(/<[^>]+>/g, '');
       }
-    } else {
-      const { person } = parsedNode;
-      people.push(person);
 
-      const union = {
-        id: generateUUID(),
-        tree_id: treeId,
-        partner1_id: person.id,
-        partner2_id: null,
-        children_ids: [],
-        type: 'relationship'
-      };
-      unions.push(union);
-      activeUnionId = union.id;
+      // Estrai etichette
+      let labelsText = '';
+      if (Array.isArray(topic.labels) && topic.labels.length > 0) {
+        labelsText = `Etichette: ${topic.labels.join(', ')}`;
+      }
 
-      if (parentUnionId) {
-        const pUnion = unions.find(u => u.id === parentUnionId);
-        if (pUnion) pUnion.children_ids.push(person.id);
+      const extraNotes = [notesText, labelsText].filter(Boolean).join(' | ');
+
+      const parsedNode = parseNodeContent(title, treeId, extraNotes);
+      if (!parsedNode) return;
+
+      let activeUnionId = null;
+
+      if (parsedNode.type === 'couple') {
+        const { partner1, partner2 } = parsedNode;
+        people.push(partner1, partner2);
+
+        const union = {
+          id: generateUUID(),
+          tree_id: treeId,
+          partner1_id: partner1.id,
+          partner2_id: partner2.id,
+          children_ids: [],
+          type: 'relationship'
+        };
+        unions.push(union);
+        activeUnionId = union.id;
+
+        if (parentUnionId) {
+          const pUnion = unions.find(u => u.id === parentUnionId);
+          if (pUnion) pUnion.children_ids.push(partner1.id);
+        }
+      } else {
+        const { person } = parsedNode;
+        people.push(person);
+
+        const union = {
+          id: generateUUID(),
+          tree_id: treeId,
+          partner1_id: person.id,
+          partner2_id: null,
+          children_ids: [],
+          type: 'relationship'
+        };
+        unions.push(union);
+        activeUnionId = union.id;
+
+        if (parentUnionId) {
+          const pUnion = unions.find(u => u.id === parentUnionId);
+          if (pUnion) pUnion.children_ids.push(person.id);
+        }
+      }
+
+      // Ricorsione su figli collegati (attached) e staccati/fluttuanti (detached)
+      const childrenAttached = topic.children && topic.children.attached;
+      if (Array.isArray(childrenAttached)) {
+        childrenAttached.forEach(childTopic => {
+          traverseTopic(childTopic, activeUnionId);
+        });
+      }
+
+      const childrenDetached = topic.children && topic.children.detached;
+      if (Array.isArray(childrenDetached)) {
+        childrenDetached.forEach(childTopic => {
+          traverseTopic(childTopic, null);
+        });
       }
     }
 
-    // Ricorsione sui figli
-    const childrenAttached = topic.children && topic.children.attached;
-    if (Array.isArray(childrenAttached)) {
-      childrenAttached.forEach(childTopic => {
-        traverseTopic(childTopic, activeUnionId);
-      });
-    }
-  }
-
-  traverseTopic(rootTopic);
+    traverseTopic(rootTopic);
+  });
 
   const cleanedUnions = unions.filter(u => u.partner2_id !== null || u.children_ids.length > 0);
 
