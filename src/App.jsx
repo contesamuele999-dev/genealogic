@@ -13,6 +13,7 @@ import AuthModal from './components/AuthModal';
 import AdminPanel from './components/AdminPanel';
 import TreeSettingsModal from './components/TreeSettingsModal';
 import BirthdayModal from './components/BirthdayModal';
+import ChangeRequestsModal from './components/ChangeRequestsModal';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
@@ -21,6 +22,7 @@ export default function App() {
   const [people, setPeople] = useState([]);
   const [unions, setUnions] = useState([]);
   const [canEdit, setCanEdit] = useState(false);
+  const [canPropose, setCanPropose] = useState(false);
   const [canManageTree, setCanManageTree] = useState(false);
   const treeLoadRequestRef = useRef(0);
 
@@ -35,6 +37,7 @@ export default function App() {
   const [showTreeSettings, setShowTreeSettings] = useState(false);
   const [showImportExport, setShowImportExport] = useState(false);
   const [showBirthdays, setShowBirthdays] = useState(false);
+  const [showChangeRequests, setShowChangeRequests] = useState(false);
 
   // Carica i dati utente
   const loadUser = useCallback(async () => {
@@ -73,28 +76,32 @@ export default function App() {
       setPeople([]);
       setUnions([]);
       setCanEdit(false);
+      setCanPropose(false);
       setCanManageTree(false);
       return;
     }
 
     const requestId = ++treeLoadRequestRef.current;
+    const sessionUserId = currentUser?.id || null;
 
     try {
-      const [pList, uList, writePermission, managePermission] = await Promise.all([
+      const [pList, uList, writePermission, proposePermission, managePermission] = await Promise.all([
         storage.getPeople(activeTreeId),
         storage.getUnions(activeTreeId),
         storage.canWriteTree(activeTreeId),
+        storage.canProposeTree(activeTreeId),
         storage.canManageTree(activeTreeId)
       ]);
-      if (requestId !== treeLoadRequestRef.current) return;
+      if (requestId !== treeLoadRequestRef.current || sessionUserId !== (currentUser?.id || null)) return;
       setPeople(pList);
       setUnions(uList);
       setCanEdit(writePermission);
+      setCanPropose(proposePermission);
       setCanManageTree(managePermission);
     } catch (err) {
       console.error(err);
     }
-  }, [activeTreeId]);
+  }, [activeTreeId, currentUser]);
 
   // Inizializzazione iniziale
   useEffect(() => {
@@ -159,8 +166,12 @@ export default function App() {
   // Salva o modifica una persona esistente
   const handleSavePerson = async (id, personData) => {
     try {
-      await storage.updatePerson(id, personData);
-      loadTreeDetails();
+      if (canEdit) {
+        await storage.updatePerson(id, personData);
+        loadTreeDetails();
+      } else {
+        await submitProposal([{ action: 'update_person', id, data: personData }]);
+      }
     } catch (err) {
       alert(err.message);
       throw err;
@@ -170,9 +181,10 @@ export default function App() {
   // Elimina una persona ed i suoi collegamenti
   const handleDeletePerson = async (id) => {
     try {
-      await storage.deletePerson(id);
+      if (canEdit) await storage.deletePerson(id);
+      else await submitProposal([{ action: 'delete_person', id }]);
       setSelectedPerson(null);
-      loadTreeDetails();
+      if (canEdit) loadTreeDetails();
     } catch (err) {
       alert(err.message);
     }
@@ -181,10 +193,10 @@ export default function App() {
   // Elimina multiple persone
   const handleDeleteMultiplePeople = async (personIds) => {
     try {
-      for (const id of personIds) {
-        await storage.deletePerson(id);
-      }
-      loadTreeDetails();
+      if (canEdit) {
+        for (const id of personIds) await storage.deletePerson(id);
+        loadTreeDetails();
+      } else await submitProposal(personIds.map(id => ({ action: 'delete_person', id })));
     } catch (err) {
       alert(err.message);
     }
@@ -204,6 +216,19 @@ export default function App() {
 
     let newPerson = null;
     try {
+      if (!canEdit) {
+        const operations = [{ action: 'add_person', id: newPersonId, data: relativeData }];
+        if (relation === 'parent' && target) operations.push({ action: 'add_union', id: generateUUID(), data: { partner1_id: newPersonId, partner2_id: null, children_ids: [target.id], type: 'relationship' } });
+        if (relation === 'partner' && target) operations.push({ action: 'add_union', id: generateUUID(), data: { partner1_id: target.id, partner2_id: newPersonId, children_ids: [], type: 'relationship' } });
+        if (relation === 'child' && target) {
+          const existingUnion = unions.find(u => u.partner1_id === target.id || u.partner2_id === target.id);
+          if (existingUnion) operations.push({ action: 'update_union', id: existingUnion.id, data: { ...existingUnion, children_ids: [...existingUnion.children_ids, newPersonId] } });
+          else operations.push({ action: 'add_union', id: generateUUID(), data: { partner1_id: target.id, partner2_id: null, children_ids: [newPersonId], type: 'relationship' } });
+        }
+        await submitProposal(operations);
+        setRelativeToAdd(null);
+        return;
+      }
       // 1. Crea la nuova persona nel database
       newPerson = await storage.addPerson({
         ...relativeData,
@@ -267,6 +292,16 @@ export default function App() {
       alert(`Errore nell'aggiunta del familiare: ${err.message}`);
       throw err;
     }
+  };
+
+  const submitProposal = async (operations) => {
+    let proposerName = '';
+    if (!currentUser) {
+      proposerName = window.prompt('Inserisci il tuo nome per firmare la proposta:') || '';
+      if (!proposerName.trim()) throw new Error('Nome obbligatorio per inviare la proposta.');
+    }
+    await storage.submitChangeRequest(activeTreeId, operations, proposerName);
+    alert('Modifica inviata: sarà visibile dopo l’approvazione del proprietario.');
   };
 
   // Importazione da file XMind o outline di testo
@@ -356,7 +391,7 @@ export default function App() {
             </button>
           )}
 
-          {activeTreeId && canEdit && (
+          {activeTreeId && (canEdit || canPropose) && (
             <>
               <button className="btn btn-primary" onClick={() => handleAddRelativeTrigger(null, 'free')} title="Aggiungi Capostipite">
                 <Plus size={16} /> Aggiungi Capostipite
@@ -367,6 +402,11 @@ export default function App() {
               {canManageTree && (
                 <button className="btn btn-secondary" onClick={() => setShowTreeSettings(true)} title="Impostazioni Albero">
                   <Settings size={16} /> Impostazioni
+                </button>
+              )}
+              {canManageTree && (
+                <button className="btn btn-secondary" onClick={() => setShowChangeRequests(true)}>
+                  <ShieldAlert size={16} /> Modifiche da approvare
                 </button>
               )}
             </>
@@ -402,7 +442,7 @@ export default function App() {
           unions={unions}
           onSelectPerson={setSelectedPerson}
           onAddRelative={handleAddRelativeTrigger}
-          canEdit={canEdit}
+          canEdit={canEdit || canPropose}
           highlightedPersonId={highlightedPersonId}
           onDeletePeople={handleDeleteMultiplePeople}
         />
@@ -442,7 +482,7 @@ export default function App() {
           onClose={() => setSelectedPerson(null)}
           onSave={handleSavePerson}
           onDelete={handleDeletePerson}
-          canEdit={canEdit}
+          canEdit={canEdit || canPropose}
         />
       )}
 
@@ -506,6 +546,9 @@ export default function App() {
             if (p) setSelectedPerson(p);
           }}
         />
+      )}
+      {showChangeRequests && activeTreeId && (
+        <ChangeRequestsModal treeId={activeTreeId} onClose={() => setShowChangeRequests(false)} onReviewed={loadTreeDetails} />
       )}
     </div>
   );

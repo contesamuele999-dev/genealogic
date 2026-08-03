@@ -154,6 +154,8 @@ export default function TreeSettingsModal({
               <option value="owner">Solo Io (Creatore/Proprietario)</option>
               <option value="auth">Tutti gli utenti registrati ed approvati</option>
               <option value="specific">Solo utenti specifici selezionati sotto</option>
+              <option value="auth_moderated">Utenti registrati e approvati (con approvazione delle modifiche)</option>
+              <option value="public_moderated">Chiunque, anche senza account (con approvazione delle modifiche)</option>
             </select>
           </div>
 

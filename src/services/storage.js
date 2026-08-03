@@ -30,6 +30,9 @@ const initLocalMockData = () => {
   if (!localStorage.getItem('genealogy_tree_editors')) {
     setLocalData('genealogy_tree_editors', []);
   }
+  if (!localStorage.getItem('genealogy_change_requests')) {
+    setLocalData('genealogy_change_requests', []);
+  }
 };
 
 initLocalMockData();
@@ -441,6 +444,77 @@ export const storage = {
       const editors = getLocalData('genealogy_tree_editors');
       return editors.some(e => e.tree_id === treeId && e.user_id === user.id);
     }
+  },
+
+  async canProposeTree(treeId) {
+    const user = await this.getCurrentUser();
+    if (isSupabaseConfigured) {
+      const { data, error } = await supabase.rpc('can_propose_tree', { target_tree_id: treeId });
+      return !error && data === true;
+    }
+    const tree = getLocalData('genealogy_trees').find(t => t.id === treeId);
+    return !!tree && (
+      tree.edit_permission === 'public_moderated'
+      || (tree.edit_permission === 'auth_moderated' && user?.is_approved)
+    );
+  },
+
+  async submitChangeRequest(treeId, operations, proposerName = '') {
+    const user = await this.getCurrentUser();
+    if (!await this.canProposeTree(treeId)) throw new Error('Non puoi proporre modifiche a questo albero.');
+    if (!user && proposerName.trim().length < 2) throw new Error('Inserisci il tuo nome.');
+    const request = {
+      id: generateUUID(), tree_id: treeId, proposer_id: user?.id || null,
+      proposer_name: user ? null : proposerName.trim(), operations,
+      status: 'pending', created_at: new Date().toISOString()
+    };
+    if (isSupabaseConfigured) {
+      const { error } = await supabase.from('change_requests').insert(request);
+      if (error) throw error;
+      return request;
+    }
+    const requests = getLocalData('genealogy_change_requests');
+    requests.push(request);
+    setLocalData('genealogy_change_requests', requests);
+    return request;
+  },
+
+  async getChangeRequests(treeId) {
+    if (!await this.canManageTree(treeId)) throw new Error('Non puoi gestire le richieste di questo albero.');
+    if (isSupabaseConfigured) {
+      const { data, error } = await supabase.from('change_requests')
+        .select('*, proposer:profiles!proposer_id(first_name,last_name)')
+        .eq('tree_id', treeId).eq('status', 'pending').order('created_at');
+      if (error) throw error;
+      return data;
+    }
+    const users = getLocalData('genealogy_users');
+    return getLocalData('genealogy_change_requests').filter(r => r.tree_id === treeId && r.status === 'pending')
+      .map(r => ({ ...r, proposer: users.find(u => u.id === r.proposer_id) || null }));
+  },
+
+  async reviewChangeRequest(requestId, approve) {
+    if (isSupabaseConfigured) {
+      const { error } = await supabase.rpc('review_change_request', { request_id: requestId, approve });
+      if (error) throw error;
+      return;
+    }
+    const requests = getLocalData('genealogy_change_requests');
+    const request = requests.find(r => r.id === requestId && r.status === 'pending');
+    if (!request || !await this.canManageTree(request.tree_id)) throw new Error('Richiesta non disponibile.');
+    if (approve) {
+      for (const op of request.operations) {
+        if (op.action === 'add_person') await this.addPerson({ ...op.data, id: op.id, tree_id: request.tree_id });
+        if (op.action === 'update_person') await this.updatePerson(op.id, { ...op.data, tree_id: request.tree_id });
+        if (op.action === 'delete_person') await this.deletePerson(op.id);
+        if (op.action === 'add_union') await this.addUnion({ ...op.data, id: op.id, tree_id: request.tree_id });
+        if (op.action === 'update_union') await this.updateUnion(op.id, { ...op.data, tree_id: request.tree_id });
+        if (op.action === 'delete_union') await this.deleteUnion(op.id);
+      }
+    }
+    request.status = approve ? 'approved' : 'rejected';
+    request.reviewed_at = new Date().toISOString();
+    setLocalData('genealogy_change_requests', requests);
   },
 
   async canManageTree(treeId) {

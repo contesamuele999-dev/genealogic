@@ -50,3 +50,20 @@ test('il fallback locale mantiene integre persone, relazioni e permessi', async 
   // Verifica anche che l'unione creata fosse quella attesa prima della pulizia.
   assert.ok(union.id);
 });
+
+test('le modifiche pubbliche moderate restano pendenti fino all’approvazione', async () => {
+  await storage.signIn('admin@example.test', 'secret');
+  const tree = await storage.createTree('Albero moderato', '', 'public', 'public_moderated');
+  await storage.signOut();
+
+  const personId = crypto.randomUUID();
+  await storage.submitChangeRequest(tree.id, [
+    { action: 'add_person', id: personId, data: { first_name: 'Proposta' } }
+  ], 'Visitatore');
+  assert.equal((await storage.getPeople(tree.id)).length, 0);
+
+  await storage.signIn('admin@example.test', 'secret');
+  const [request] = await storage.getChangeRequests(tree.id);
+  await storage.reviewChangeRequest(request.id, true);
+  assert.equal((await storage.getPeople(tree.id))[0].first_name, 'Proposta');
+});

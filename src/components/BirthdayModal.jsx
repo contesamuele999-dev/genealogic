@@ -1,10 +1,13 @@
 import React, { useState } from 'react';
 import { X, Cake, Mail, Calendar, Check, Send } from 'lucide-react';
 import { getUpcomingBirthdays, generateBirthdayEmailContent } from '../services/birthdayService';
+import { sendEmail } from '../services/emailService';
 
 export default function BirthdayModal({ isOpen, onClose, people = [], treeName = '', onSelectPerson }) {
   const [selectedDays, setSelectedDays] = useState(60);
   const [copiedId, setCopiedId] = useState(null);
+  const [recipients, setRecipients] = useState('');
+  const [sendingId, setSendingId] = useState(null);
 
   if (!isOpen) return null;
 
@@ -18,10 +21,21 @@ export default function BirthdayModal({ isOpen, onClose, people = [], treeName =
     setTimeout(() => setCopiedId(null), 3500);
   };
 
-  const handleOpenMailClient = (item) => {
+  const handleSendEmail = async (item) => {
+    if (!recipients.trim()) {
+      alert('Inserisci almeno un indirizzo email destinatario.');
+      return;
+    }
     const { subject, body } = generateBirthdayEmailContent(item, treeName);
-    const mailtoUrl = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    window.open(mailtoUrl, '_blank');
+    setSendingId(item.person.id);
+    try {
+      await sendEmail({ to: recipients, subject, plain: body });
+      alert('Email inviata tramite Maileroo.');
+    } catch (error) {
+      alert(`Invio non riuscito: ${error.message}`);
+    } finally {
+      setSendingId(null);
+    }
   };
 
   return (
@@ -60,6 +74,18 @@ export default function BirthdayModal({ isOpen, onClose, people = [], treeName =
               </button>
             ))}
           </div>
+        </div>
+
+        <div className="p-16 border-b bg-app-subtle">
+          <label className="text-sm font-medium">Destinatari email</label>
+          <input
+            type="text"
+            className="form-control"
+            value={recipients}
+            onChange={(event) => setRecipients(event.target.value)}
+            placeholder="mario@esempio.it, lucia@esempio.it"
+          />
+          <span className="text-xs text-muted">Separa più indirizzi con una virgola.</span>
         </div>
 
         {/* Lista Compleanni */}
@@ -122,11 +148,12 @@ export default function BirthdayModal({ isOpen, onClose, people = [], treeName =
                       </button>
                       <button
                         className="btn btn-sm btn-primary flex-align gap-6"
-                        onClick={() => handleOpenMailClient(item)}
-                        title="Apri client email predefinito"
+                        onClick={() => handleSendEmail(item)}
+                        title="Invia tramite Maileroo"
+                        disabled={sendingId === person.id}
                       >
                         <Send size={14} />
-                        Invia Email
+                        {sendingId === person.id ? 'Invio…' : 'Invia Email'}
                       </button>
                     </div>
                   </div>
