@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Network, Plus, ShieldAlert, LogIn, LogOut, Settings, Upload, AlertCircle, Cake } from 'lucide-react';
+import { Network, Plus, ShieldAlert, LogIn, LogOut, Settings, Upload, AlertCircle, Cake, Share2, Check } from 'lucide-react';
 import { storage } from './services/storage';
 import { generateUUID } from './services/xmindParser';
 import { getUpcomingBirthdays } from './services/birthdayService';
+import { buildTreeShareUrl, getTreeIdFromUrl, replaceTreeInUrl } from './services/treeShare';
 
 // Componenti
 import GenealogyTree from './components/GenealogyTree';
@@ -38,6 +39,7 @@ export default function App() {
   const [showImportExport, setShowImportExport] = useState(false);
   const [showBirthdays, setShowBirthdays] = useState(false);
   const [showChangeRequests, setShowChangeRequests] = useState(false);
+  const [shareCopied, setShareCopied] = useState(false);
 
   // Carica i dati utente
   const loadUser = useCallback(async () => {
@@ -57,9 +59,11 @@ export default function App() {
       
       // Imposta il primo albero come attivo se non ne è già selezionato uno valido
       if (list.length > 0) {
-        setActiveTreeId(currentId => (
-          currentId && list.some(tree => tree.id === currentId) ? currentId : list[0].id
-        ));
+        const requestedTreeId = getTreeIdFromUrl();
+        setActiveTreeId(currentId => {
+          if (requestedTreeId && list.some(tree => tree.id === requestedTreeId)) return requestedTreeId;
+          return currentId && list.some(tree => tree.id === currentId) ? currentId : list[0].id;
+        });
       } else {
         setActiveTreeId('');
         setPeople([]);
@@ -131,6 +135,7 @@ export default function App() {
       alert(`Albero "${newTree.name}" creato con successo!`);
       await loadTrees();
       setActiveTreeId(newTree.id);
+      replaceTreeInUrl(newTree.id);
     } catch (err) {
       alert(`Errore nella creazione: ${err.message}`);
     }
@@ -294,6 +299,27 @@ export default function App() {
     }
   };
 
+  const handleTreeSelection = (treeId) => {
+    setPeople([]);
+    setUnions([]);
+    setCanEdit(false);
+    setCanPropose(false);
+    setCanManageTree(false);
+    setActiveTreeId(treeId);
+    replaceTreeInUrl(treeId);
+  };
+
+  const handleShareTree = async () => {
+    const shareUrl = buildTreeShareUrl(activeTreeId);
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setShareCopied(true);
+      setTimeout(() => setShareCopied(false), 2500);
+    } catch {
+      window.prompt('Copia il link dell’albero:', shareUrl);
+    }
+  };
+
   const submitProposal = async (operations) => {
     let proposerName = '';
     if (!currentUser) {
@@ -338,13 +364,7 @@ export default function App() {
             <select
               className="tree-select"
               value={activeTreeId}
-              onChange={(e) => {
-                setPeople([]);
-                setUnions([]);
-                setCanEdit(false);
-                setCanManageTree(false);
-                setActiveTreeId(e.target.value);
-              }}
+              onChange={(e) => handleTreeSelection(e.target.value)}
             >
               {trees.map(t => (
                 <option key={t.id} value={t.id}>
@@ -375,6 +395,12 @@ export default function App() {
 
         {/* Azioni Utente e Pannelli */}
         <div className="header-actions">
+          {activeTreeId && (
+            <button className="btn btn-secondary flex-align gap-6" onClick={handleShareTree} title="Copia il link di questo albero">
+              {shareCopied ? <Check size={16} /> : <Share2 size={16} />}
+              {shareCopied ? 'Link copiato' : 'Condividi'}
+            </button>
+          )}
           {activeTreeId && (
             <button
               className="btn btn-secondary relative flex-align gap-6"
