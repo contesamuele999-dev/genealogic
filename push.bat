@@ -52,7 +52,13 @@ if errorlevel 1 (
         exit /b 1
     )
 ) else (
-    echo [2/3] Nessuna nuova modifica da committare. Proseguo con il push.
+    echo [2/3] Nessuna nuova modifica. Creo un commit vuoto per riavviare il deploy...
+    git commit --allow-empty -m "Redeploy: %date% %time%"
+    if errorlevel 1 (
+        echo [ERRORE] Creazione commit di redeploy fallita.
+        pause
+        exit /b 1
+    )
 )
 
 echo [3/3] Invio modifiche al server remoto (git push)...
