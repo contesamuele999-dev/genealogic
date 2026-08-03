@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import { Plus, HeartPulse, FileText, UserPlus, Heart, Link } from 'lucide-react';
 
 export default function NodeCard({
@@ -23,7 +23,7 @@ export default function NodeCard({
     onAddRelative(relation);
   };
 
-  const handleQuickAddMouseLeave = (e) => {
+  const handleQuickAddMouseLeave = () => {
     // Ritarda la chiusura per permettere al click di avvenire
     setTimeout(() => {
       // Chiudi solo se il menu non è hovered e non c'è un click in sospeso

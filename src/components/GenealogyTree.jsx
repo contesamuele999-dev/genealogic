@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
-import { ZoomIn, ZoomOut, Maximize, RefreshCw, Plus, UserPlus, Trash2 } from 'lucide-react';
+import { ZoomIn, ZoomOut, Maximize, RefreshCw, Trash2 } from 'lucide-react';
 import NodeCard from './NodeCard';
 
 // Dimensioni di layout
@@ -7,8 +7,44 @@ const CARD_WIDTH = 190;
 const CARD_HEIGHT = 80;
 const HORIZONTAL_GAP = 60;
 const VERTICAL_GAP = 120;
+const HORIZONTAL_GENERATION_GAP = 280;
+
+const LAYOUT_OPTIONS = [
+  { value: 'organigram', label: 'Organigramma' },
+  { value: 'horizontal', label: 'Albero verso destra' },
+  { value: 'conceptual', label: 'Mappa concettuale' },
+  { value: 'table', label: 'Vista tabellare' }
+];
+
+function getConceptualViewport(layoutPositions, viewportWidth, viewportHeight) {
+  const values = Object.values(layoutPositions);
+  if (values.length === 0) {
+    return { zoom: 0.75, pan: { x: viewportWidth / 2, y: viewportHeight / 2 } };
+  }
+
+  const minX = Math.min(...values.map(position => position.x - CARD_WIDTH / 2));
+  const maxX = Math.max(...values.map(position => position.x + CARD_WIDTH / 2));
+  const minY = Math.min(...values.map(position => position.y - CARD_HEIGHT / 2));
+  const maxY = Math.max(...values.map(position => position.y + CARD_HEIGHT / 2));
+  const availableWidth = Math.max(320, viewportWidth - 230);
+  const availableHeight = Math.max(240, viewportHeight - 60);
+  const contentWidth = Math.max(1, maxX - minX);
+  const contentHeight = Math.max(1, maxY - minY);
+  const zoom = Math.max(0.35, Math.min(0.8, availableWidth / contentWidth, availableHeight / contentHeight));
+  const contentCenterX = (minX + maxX) / 2;
+  const contentCenterY = (minY + maxY) / 2;
+
+  return {
+    zoom,
+    pan: {
+      x: availableWidth / 2 - contentCenterX * zoom,
+      y: viewportHeight / 2 - contentCenterY * zoom
+    }
+  };
+}
 
 export default function GenealogyTree({
+  treeId,
   people,
   unions,
   onSelectPerson,
@@ -22,9 +58,12 @@ export default function GenealogyTree({
   // Stato del drag corrente (ref: non provoca re-render e non è soggetto a closure stale)
   const dragRef = useRef(null);
   // Memoria posizioni manuali (drag)
-  const manualPositionsRef = useRef({});
+  const manualPositionsByModeRef = useRef({ organigram: {} });
+  const manualPositionsRef = useRef(manualPositionsByModeRef.current.organigram);
   // Nodi selezionati per multi-select
   const [selectedPeople, setSelectedPeople] = useState(new Set());
+  const [includeSingleNodesInReset, setIncludeSingleNodesInReset] = useState(false);
+  const [layoutMode, setLayoutMode] = useState('organigram');
 
   // Stati per Pan & Zoom
   const [pan, setPan] = useState({ x: 100, y: 100 });
@@ -37,11 +76,123 @@ export default function GenealogyTree({
   const hasCenteredRef = useRef(false);
   const [layoutVersion, setLayoutVersion] = useState(0);
 
+  useEffect(() => {
+    manualPositionsByModeRef.current = { organigram: {} };
+    manualPositionsRef.current = {};
+    hasCenteredRef.current = false;
+    setSelectedPeople(new Set());
+    setPositions({});
+  }, [treeId]);
+
   // Hash per rilevare cambiamenti reali nei dati
   const dataHash = useMemo(() => {
     const pHash = people ? people.map(p => `${p.id}:${p.first_name}:${p.last_name}`).join('|') : '';
     const uHash = unions ? unions.map(u => `${u.id}:${u.partner1_id || ''}:${u.partner2_id || ''}:${u.children_ids?.join(',') || ''}`).join('|') : '';
     return [pHash, uHash].join('||');
+  }, [people, unions]);
+
+  const coupledPersonIds = useMemo(() => {
+    const ids = new Set();
+    unions.forEach(union => {
+      if (union.partner1_id && union.partner2_id) {
+        ids.add(union.partner1_id);
+        ids.add(union.partner2_id);
+      }
+    });
+    return ids;
+  }, [unions]);
+
+  const tableRows = useMemo(() => {
+    const peopleById = new Map(people.map(person => [person.id, person]));
+    const parentsByPerson = new Map(people.map(person => [person.id, new Set()]));
+    const partnersByPerson = new Map(people.map(person => [person.id, new Set()]));
+    const childrenByPerson = new Map(people.map(person => [person.id, new Set()]));
+
+    unions.forEach(union => {
+      if (union.partner1_id && union.partner2_id) {
+        partnersByPerson.get(union.partner1_id)?.add(union.partner2_id);
+        partnersByPerson.get(union.partner2_id)?.add(union.partner1_id);
+      }
+      (union.children_ids || []).forEach(childId => {
+        if (union.partner1_id) {
+          parentsByPerson.get(childId)?.add(union.partner1_id);
+          childrenByPerson.get(union.partner1_id)?.add(childId);
+        }
+        if (union.partner2_id) {
+          parentsByPerson.get(childId)?.add(union.partner2_id);
+          childrenByPerson.get(union.partner2_id)?.add(childId);
+        }
+      });
+    });
+
+    const generationCache = new Map();
+    const getGeneration = (personId, visiting = new Set()) => {
+      if (generationCache.has(personId)) return generationCache.get(personId);
+      if (visiting.has(personId)) return 0;
+      const nextVisiting = new Set(visiting).add(personId);
+      const parentIds = [...(parentsByPerson.get(personId) || [])];
+      const generation = parentIds.length === 0
+        ? 0
+        : Math.max(...parentIds.map(parentId => getGeneration(parentId, nextVisiting))) + 1;
+      generationCache.set(personId, generation);
+      return generation;
+    };
+
+    people.forEach(person => getGeneration(person.id));
+    let generationsChanged = true;
+    let generationIterations = 0;
+    while (generationsChanged && generationIterations < Math.max(10, people.length * 2)) {
+      generationsChanged = false;
+      unions.forEach(union => {
+        if (union.partner1_id && union.partner2_id) {
+          const coupleGeneration = Math.max(
+            generationCache.get(union.partner1_id) || 0,
+            generationCache.get(union.partner2_id) || 0
+          );
+          if ((generationCache.get(union.partner1_id) || 0) !== coupleGeneration) {
+            generationCache.set(union.partner1_id, coupleGeneration);
+            generationsChanged = true;
+          }
+          if ((generationCache.get(union.partner2_id) || 0) !== coupleGeneration) {
+            generationCache.set(union.partner2_id, coupleGeneration);
+            generationsChanged = true;
+          }
+        }
+
+        const parentGeneration = Math.max(
+          generationCache.get(union.partner1_id) || 0,
+          generationCache.get(union.partner2_id) || 0
+        );
+        (union.children_ids || []).forEach(childId => {
+          if ((generationCache.get(childId) || 0) <= parentGeneration) {
+            generationCache.set(childId, parentGeneration + 1);
+            generationsChanged = true;
+          }
+        });
+      });
+      generationIterations++;
+    }
+
+    const formatNames = (ids) => [...ids]
+      .map(id => peopleById.get(id))
+      .filter(Boolean)
+      .map(person => `${person.first_name || ''} ${person.last_name || ''}`.trim())
+      .sort((a, b) => a.localeCompare(b, 'it'))
+      .join(', ');
+
+    return people
+      .map(person => ({
+        person,
+        generation: generationCache.get(person.id) || 0,
+        parents: formatNames(parentsByPerson.get(person.id) || []),
+        partners: formatNames(partnersByPerson.get(person.id) || []),
+        children: formatNames(childrenByPerson.get(person.id) || [])
+      }))
+      .sort((a, b) => (
+        a.generation - b.generation
+        || (a.person.last_name || '').localeCompare(b.person.last_name || '', 'it')
+        || (a.person.first_name || '').localeCompare(b.person.first_name || '', 'it')
+      ));
   }, [people, unions]);
 
   // 1. Algoritmo di Auto-Layout Generazionale
@@ -137,8 +288,6 @@ export default function GenealogyTree({
 
     // Calcola le coordinate X e Y per ciascun nodo
     const newPositions = {};
-    const maxGen = Math.max(...Object.keys(genGroups).map(Number), 0);
-
     // Mappa le unioni per identificare coppie
     const couples = [];
     const singlePeople = new Set(people.map(p => p.id));
@@ -150,6 +299,60 @@ export default function GenealogyTree({
         singlePeople.delete(u.partner2_id);
       }
     });
+
+    // La larghezza di un ramo deve includere tutti i discendenti, non soltanto
+    // i figli diretti. In caso contrario il successivo centraggio delle famiglie
+    // può spostare un sottoalbero dentro quello vicino.
+    const branchWidthCache = new Map();
+    const getPartnerComponent = (personId) => {
+      const component = new Set();
+      const queue = [personId];
+
+      while (queue.length > 0) {
+        const currentId = queue.shift();
+        if (!currentId || component.has(currentId)) continue;
+        component.add(currentId);
+
+        unions.forEach(union => {
+          if (union.partner1_id === currentId && union.partner2_id && !component.has(union.partner2_id)) {
+            queue.push(union.partner2_id);
+          } else if (union.partner2_id === currentId && union.partner1_id && !component.has(union.partner1_id)) {
+            queue.push(union.partner1_id);
+          }
+        });
+      }
+
+      return component;
+    };
+
+    const getBranchWidth = (personId, visiting = new Set()) => {
+      if (branchWidthCache.has(personId)) return branchWidthCache.get(personId);
+      if (visiting.has(personId)) return CARD_WIDTH;
+
+      const nextVisiting = new Set(visiting);
+      nextVisiting.add(personId);
+      const partnerComponent = getPartnerComponent(personId);
+      const ownWidth = partnerComponent.size * CARD_WIDTH
+        + Math.max(0, partnerComponent.size - 1) * HORIZONTAL_GAP;
+      const childIds = new Set();
+
+      unions.forEach(union => {
+        const belongsToComponent = partnerComponent.has(union.partner1_id)
+          || partnerComponent.has(union.partner2_id);
+        if (!belongsToComponent) return;
+        (union.children_ids || []).forEach(childId => childIds.add(childId));
+      });
+
+      const descendantWidths = [...childIds].map(childId => getBranchWidth(childId, nextVisiting));
+      const descendantsWidth = descendantWidths.length > 0
+        ? descendantWidths.reduce((total, width) => total + width, 0)
+          + (descendantWidths.length - 1) * HORIZONTAL_GAP
+        : 0;
+      const width = Math.max(ownWidth, descendantsWidth);
+
+      partnerComponent.forEach(componentPersonId => branchWidthCache.set(componentPersonId, width));
+      return width;
+    };
 
     // Posiziona i nodi generazione per generazione (raggruppando i fratelli assieme e distanziando i genitori in base allo spazio richiesto dai figli)
     const sortedGenKeys = Object.keys(genGroups).map(Number).sort((a, b) => a - b);
@@ -230,35 +433,11 @@ export default function GenealogyTree({
         }
       });
 
-      // Funzione per identificare i figli di un elemento della generazione
-      const getElementChildrenIds = (el) => {
-        if (el.type === 'couple') {
-          const u = unions.find(x => x.id === el.unionId);
-          return u && Array.isArray(u.children_ids) ? u.children_ids : [];
-        } else {
-          const uList = unions.filter(x => x.partner1_id === el.id || x.partner2_id === el.id);
-          const cIds = [];
-          uList.forEach(u => {
-            if (Array.isArray(u.children_ids)) cIds.push(...u.children_ids);
-          });
-          return cIds;
-        }
-      };
-
-      // Calcola la larghezza dinamica riservata a ciascun elemento in base allo spazio richiesto dai suoi figli
+      // Riserva a ogni elemento lo spazio richiesto dal suo intero sottoalbero.
       const elementWidths = genElements.map(el => {
         const selfW = el.type === 'couple' ? (CARD_WIDTH * 2 + HORIZONTAL_GAP) : CARD_WIDTH;
-        const childIds = getElementChildrenIds(el);
-        if (childIds.length > 0) {
-          let childrenW = 0;
-          childIds.forEach(cId => {
-            const isCouple = couples.some(c => c.p1 === cId || c.p2 === cId);
-            childrenW += isCouple ? (CARD_WIDTH * 2 + HORIZONTAL_GAP) : CARD_WIDTH;
-          });
-          childrenW += (childIds.length - 1) * HORIZONTAL_GAP;
-          return Math.max(selfW, childrenW);
-        }
-        return selfW;
+        const rootPersonId = el.type === 'couple' ? el.ids[0] : el.id;
+        return Math.max(selfW, getBranchWidth(rootPersonId));
       });
 
       // Calcola larghezza totale occupata da questa generazione considerando lo spazio richiesto dalle sotto-strutture dei figli
@@ -273,19 +452,19 @@ export default function GenealogyTree({
         const slotCenterX = currentX + allocatedW / 2;
 
         if (el.type === 'couple') {
-          const savedP1 = manualPositionsRef.current[el.ids[0]];
-          const savedP2 = manualPositionsRef.current[el.ids[1]];
-          const p1X = savedP1 ? savedP1.x : slotCenterX - (CARD_WIDTH + HORIZONTAL_GAP) / 2;
-          const p2X = savedP2 ? savedP2.x : slotCenterX + (CARD_WIDTH + HORIZONTAL_GAP) / 2;
-
-          newPositions[el.ids[0]] = { x: p1X, y: savedP1?.y ?? y };
-          newPositions[el.ids[1]] = { x: p2X, y: savedP2?.y ?? y };
+          newPositions[el.ids[0]] = {
+            x: slotCenterX - (CARD_WIDTH + HORIZONTAL_GAP) / 2,
+            y
+          };
+          newPositions[el.ids[1]] = {
+            x: slotCenterX + (CARD_WIDTH + HORIZONTAL_GAP) / 2,
+            y
+          };
           newPositions[`union_${el.unionId}`] = { x: slotCenterX, y };
         } else {
-          const saved = manualPositionsRef.current[el.id];
           newPositions[el.id] = {
-            x: saved ? saved.x : slotCenterX,
-            y: saved ? saved.y : y
+            x: slotCenterX,
+            y
           };
         }
 
@@ -293,16 +472,229 @@ export default function GenealogyTree({
       });
     });
 
-    setPositions(newPositions);
+    // Centra ogni gruppo di figli sotto il punto medio della coppia e sposta
+    // con esso l'intero ramo discendente, inclusi gli eventuali partner.
+    const unionsByGeneration = [...unions].sort((a, b) => {
+      const aGeneration = Math.max(
+        generations[a.partner1_id] || 0,
+        generations[a.partner2_id] || 0
+      );
+      const bGeneration = Math.max(
+        generations[b.partner1_id] || 0,
+        generations[b.partner2_id] || 0
+      );
+      return aGeneration - bGeneration;
+    });
+
+    const collectDescendantBranchIds = (rootPersonId) => {
+      const branchIds = new Set();
+      const queue = [rootPersonId];
+
+      while (queue.length > 0) {
+        const personId = queue.shift();
+        if (!personId || branchIds.has(personId)) continue;
+        branchIds.add(personId);
+
+        unions.forEach(union => {
+          const isPartner = union.partner1_id === personId || union.partner2_id === personId;
+          if (!isPartner) return;
+
+          const partnerId = union.partner1_id === personId
+            ? union.partner2_id
+            : union.partner1_id;
+          if (partnerId && !branchIds.has(partnerId)) queue.push(partnerId);
+          (union.children_ids || []).forEach(childId => {
+            if (!branchIds.has(childId)) queue.push(childId);
+          });
+        });
+      }
+
+      return branchIds;
+    };
+
+    unionsByGeneration.forEach(union => {
+      const childIds = (union.children_ids || []).filter(childId => newPositions[childId]);
+      const parent1Position = newPositions[union.partner1_id];
+      const parent2Position = union.partner2_id ? newPositions[union.partner2_id] : null;
+      if (childIds.length === 0 || !parent1Position) return;
+
+      const parentCenterX = parent2Position
+        ? (parent1Position.x + parent2Position.x) / 2
+        : parent1Position.x;
+      const immediateFamilyIds = new Set(childIds);
+
+      childIds.forEach(childId => {
+        unions.forEach(childUnion => {
+          if (childUnion.partner1_id === childId && childUnion.partner2_id) {
+            immediateFamilyIds.add(childUnion.partner2_id);
+          } else if (childUnion.partner2_id === childId && childUnion.partner1_id) {
+            immediateFamilyIds.add(childUnion.partner1_id);
+          }
+        });
+      });
+
+      const immediatePositions = [...immediateFamilyIds]
+        .map(personId => newPositions[personId])
+        .filter(Boolean);
+      if (immediatePositions.length === 0) return;
+
+      const leftEdge = Math.min(...immediatePositions.map(position => position.x - CARD_WIDTH / 2));
+      const rightEdge = Math.max(...immediatePositions.map(position => position.x + CARD_WIDTH / 2));
+      const childrenCenterX = (leftEdge + rightEdge) / 2;
+      const offsetX = parentCenterX - childrenCenterX;
+      if (Math.abs(offsetX) < 0.01) return;
+
+      const branchIds = new Set();
+      childIds.forEach(childId => {
+        collectDescendantBranchIds(childId).forEach(personId => branchIds.add(personId));
+      });
+      branchIds.forEach(personId => {
+        if (newPositions[personId]) {
+          newPositions[personId] = {
+            ...newPositions[personId],
+            x: newPositions[personId].x + offsetX
+          };
+        }
+      });
+    });
+
+    const autoPositions = {};
+
+    if (layoutMode === 'conceptual') {
+      const rootIds = people
+        .filter(person => (generations[person.id] || 0) === 0)
+        .map(person => person.id)
+        .sort((a, b) => (newPositions[a]?.x || 0) - (newPositions[b]?.x || 0));
+
+      rootIds.forEach((personId, index) => {
+        autoPositions[personId] = {
+          x: 0,
+          y: (index - (rootIds.length - 1) / 2) * 120
+        };
+      });
+
+      const branchAnchorSet = new Set();
+      unions.forEach(union => {
+        const parentGeneration = Math.max(
+          generations[union.partner1_id] || 0,
+          generations[union.partner2_id] || 0
+        );
+        if (parentGeneration === 0) {
+          (union.children_ids || []).forEach(childId => branchAnchorSet.add(childId));
+        }
+      });
+
+      const branchAnchorIds = [...branchAnchorSet].sort(
+        (a, b) => (newPositions[a]?.x || 0) - (newPositions[b]?.x || 0)
+      );
+      const leftCount = Math.floor(branchAnchorIds.length / 2);
+      const leftAnchors = branchAnchorIds.slice(0, leftCount);
+      const rightAnchors = branchAnchorIds.slice(leftCount);
+      const branchAssignments = new Map();
+
+      const assignSide = (anchorIds, side) => {
+        anchorIds.forEach((anchorId, index) => {
+          branchAssignments.set(anchorId, {
+            side,
+            baseY: (index - (anchorIds.length - 1) / 2) * 340
+          });
+        });
+      };
+      assignSide(leftAnchors, -1);
+      assignSide(rightAnchors, 1);
+
+      const personBranch = new Map();
+      branchAnchorIds.forEach(anchorId => {
+        const queue = [anchorId];
+        while (queue.length > 0) {
+          const personId = queue.shift();
+          if (!personId || personBranch.has(personId) || (generations[personId] || 0) === 0) continue;
+          personBranch.set(personId, anchorId);
+
+          unions.forEach(union => {
+            const isPartner = union.partner1_id === personId || union.partner2_id === personId;
+            if (!isPartner) return;
+
+            const partnerId = union.partner1_id === personId
+              ? union.partner2_id
+              : union.partner1_id;
+            if (partnerId && !personBranch.has(partnerId)) queue.push(partnerId);
+            (union.children_ids || []).forEach(childId => {
+              if (!personBranch.has(childId)) queue.push(childId);
+            });
+          });
+        }
+      });
+
+      branchAnchorIds.forEach(anchorId => {
+        const assignment = branchAssignments.get(anchorId);
+        sortedGenKeys.filter(gen => gen > 0).forEach(gen => {
+          const ids = people
+            .filter(person => personBranch.get(person.id) === anchorId && (generations[person.id] || 0) === gen)
+            .map(person => person.id)
+            .sort((a, b) => (newPositions[a]?.x || 0) - (newPositions[b]?.x || 0));
+
+          ids.forEach((personId, index) => {
+            autoPositions[personId] = {
+              x: assignment.side * (340 + (gen - 1) * 320),
+              y: assignment.baseY + (index - (ids.length - 1) / 2) * 125
+            };
+          });
+        });
+      });
+
+      const unassignedIds = people
+        .filter(person => !autoPositions[person.id])
+        .map(person => person.id)
+        .sort((a, b) => (newPositions[a]?.x || 0) - (newPositions[b]?.x || 0));
+      unassignedIds.forEach((personId, index) => {
+        const generation = generations[personId] || 1;
+        const side = index % 2 === 0 ? -1 : 1;
+        autoPositions[personId] = {
+          x: side * (340 + (generation - 1) * 320),
+          y: (Math.floor(index / 2) - (unassignedIds.length - 1) / 4) * 150
+        };
+      });
+    } else {
+      people.forEach(person => {
+        const base = newPositions[person.id] || { x: 0, y: 100 };
+
+        if (layoutMode === 'horizontal') {
+          autoPositions[person.id] = {
+            x: 100 + ((base.y - 100) / VERTICAL_GAP) * HORIZONTAL_GENERATION_GAP,
+            y: base.x
+          };
+        } else {
+          autoPositions[person.id] = base;
+        }
+      });
+    }
+
+    Object.entries(manualPositionsRef.current).forEach(([personId, manualPosition]) => {
+      if (autoPositions[personId]) {
+        autoPositions[personId] = manualPosition;
+      }
+    });
+
+    setPositions(autoPositions);
 
     // Centra l'albero sullo schermo SOLO al primo caricamento:
     // ricentrare ad ogni modifica dei dati faceva "saltare" la visuale.
     if (!hasCenteredRef.current && wrapperRef.current) {
       hasCenteredRef.current = true;
       const wWidth = wrapperRef.current.clientWidth;
-      setPan({ x: wWidth / 2, y: 80 });
+      const wHeight = wrapperRef.current.clientHeight;
+      if (layoutMode === 'conceptual') {
+        const fittedView = getConceptualViewport(autoPositions, wWidth, wHeight);
+        setZoom(fittedView.zoom);
+        setPan(fittedView.pan);
+      } else if (layoutMode === 'horizontal') {
+        setPan({ x: 80, y: wHeight / 2 });
+      } else {
+        setPan({ x: wWidth / 2, y: 80 });
+      }
     }
-  }, [dataHash, layoutVersion]);
+  }, [people, unions, layoutMode, layoutVersion]);
 
   // Mantiene le posizioni aggiornate in un ref (evita dipendenze che rilanciano effetti durante il drag)
   const positionsRef = useRef(positions);
@@ -312,6 +704,7 @@ export default function GenealogyTree({
 
   // Gestione del Pan (trascinamento dello sfondo)
   const handleMouseDown = (e) => {
+    if (layoutMode === 'table') return;
     if (e.target.closest('.node-card') || e.target.closest('.btn') || e.target.closest('.btn-quick-add') || e.target.closest('.couple-connector')) return;
     setIsPanning(true);
     setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
@@ -377,6 +770,7 @@ export default function GenealogyTree({
 
   // Zoom con la rotella, ancorato alla posizione del cursore
   const handleWheel = (e) => {
+    if (layoutMode === 'table') return;
     e.preventDefault();
     const rect = wrapperRef.current.getBoundingClientRect();
     const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
@@ -391,23 +785,48 @@ export default function GenealogyTree({
   };
   const zoomIn = () => zoomAtCenter(1.2);
   const zoomOut = () => zoomAtCenter(1 / 1.2);
-  const resetPanZoom = () => {
-    if (wrapperRef.current) {
-      const wWidth = wrapperRef.current.clientWidth;
+  const centerCurrentLayout = () => {
+    if (!wrapperRef.current) return;
+    const wWidth = wrapperRef.current.clientWidth;
+    const wHeight = wrapperRef.current.clientHeight;
+
+    if (layoutMode === 'conceptual') {
+      const fittedView = getConceptualViewport(positions, wWidth, wHeight);
+      setZoom(fittedView.zoom);
+      setPan(fittedView.pan);
+    } else if (layoutMode === 'horizontal') {
+      setPan({ x: 80, y: wHeight / 2 });
+    } else {
       setPan({ x: wWidth / 2, y: 80 });
-      setZoom(0.85);
     }
   };
-  const resetLayout = () => {
-    manualPositionsRef.current = {};
-    // Forza il ricalcolo del layout: senza questo i nodi restavano a 0,0
-    // perché l'effetto dipende solo da dataHash (invariato).
-    setLayoutVersion(v => v + 1);
-    if (wrapperRef.current) {
-      const wWidth = wrapperRef.current.clientWidth;
-      setPan({ x: wWidth / 2, y: 80 });
-      setZoom(0.85);
+  const resetPanZoom = () => {
+    centerCurrentLayout();
+    if (layoutMode !== 'conceptual') setZoom(0.85);
+  };
+  const handleLayoutModeChange = (nextMode) => {
+    manualPositionsByModeRef.current[layoutMode] = manualPositionsRef.current;
+    const nextManualPositions = manualPositionsByModeRef.current[nextMode] || {};
+    manualPositionsByModeRef.current[nextMode] = nextManualPositions;
+    manualPositionsRef.current = nextManualPositions;
+    hasCenteredRef.current = false;
+    setLayoutMode(nextMode);
+  };
+  const resetNodePositions = () => {
+    if (includeSingleNodesInReset) {
+      manualPositionsRef.current = {};
+    } else {
+      const positionsToKeep = { ...manualPositionsRef.current };
+      coupledPersonIds.forEach(personId => {
+        delete positionsToKeep[personId];
+      });
+      manualPositionsRef.current = positionsToKeep;
     }
+    manualPositionsByModeRef.current[layoutMode] = manualPositionsRef.current;
+
+    // Forza il ricalcolo anche se i dati genealogici non sono cambiati.
+    hasCenteredRef.current = false;
+    setLayoutVersion(v => v + 1);
   };
 
   // Mousedown su un nodo: gestisce selezione multipla (Shift) e avvio del drag.
@@ -495,8 +914,6 @@ export default function GenealogyTree({
     unions.forEach(u => {
       const p1 = positions[u.partner1_id];
       const p2 = u.partner2_id ? positions[u.partner2_id] : null;
-      const unionPos = positions[`union_${u.id}`];
-
       if (!p1) return;
 
       // 1. Linea tra partner
@@ -507,7 +924,7 @@ export default function GenealogyTree({
             key={`union-line-${u.id}`}
             d={`M ${p1.x} ${p1.y} L ${p2.x} ${p2.y}`}
             className={`connection-line ${isHighlighted ? 'highlighted' : ''}`}
-            style={{ strokeStyle: u.type === 'divorced' ? 'dashed' : 'solid' }}
+            style={{ strokeDasharray: u.type === 'divorced' ? '8 6' : 'none' }}
           />
         );
       }
@@ -520,6 +937,60 @@ export default function GenealogyTree({
           .filter(c => c.pos);
 
         if (childEntries.length === 0) return;
+
+        const isParentHighlighted = highlightedPersonId === u.partner1_id || (p2 && highlightedPersonId === u.partner2_id);
+
+        if (layoutMode === 'conceptual') {
+          const startX = p2 ? (p1.x + p2.x) / 2 : p1.x;
+          const startY = p2 ? (p1.y + p2.y) / 2 : p1.y;
+
+          childEntries.forEach(({ childId, pos: childPos }) => {
+            const isPathHighlighted = isParentHighlighted || highlightedPersonId === childId;
+            const direction = childPos.x >= startX ? 1 : -1;
+            const startEdgeX = startX + direction * CARD_WIDTH / 2;
+            const childEdgeX = childPos.x - direction * CARD_WIDTH / 2;
+            const curveOffset = Math.max(90, Math.abs(childEdgeX - startEdgeX) * 0.45);
+            lines.push(
+              <path
+                key={`conceptual-child-link-${u.id}-${childId}`}
+                d={`M ${startEdgeX} ${startY} C ${startEdgeX + direction * curveOffset} ${startY}, ${childEdgeX - direction * curveOffset} ${childPos.y}, ${childEdgeX} ${childPos.y}`}
+                className={`connection-line ${isPathHighlighted ? 'highlighted' : ''}`}
+              />
+            );
+          });
+          return;
+        }
+
+        if (layoutMode === 'horizontal') {
+          const startX = Math.max(
+            p1.x + CARD_WIDTH / 2,
+            p2 ? p2.x + CARD_WIDTH / 2 : p1.x + CARD_WIDTH / 2
+          );
+          const startY = p2 ? (p1.y + p2.y) / 2 : p1.y;
+          const minChildLeftX = Math.min(...childEntries.map(c => c.pos.x - CARD_WIDTH / 2));
+          const busX = startX + (minChildLeftX - startX) / 2;
+
+          lines.push(
+            <path
+              key={`parent-right-${u.id}`}
+              d={`M ${startX} ${startY} L ${busX} ${startY}`}
+              className={`connection-line ${isParentHighlighted ? 'highlighted' : ''}`}
+            />
+          );
+
+          childEntries.forEach(({ childId, pos: childPos }) => {
+            const childEdgeX = childPos.x + (childPos.x >= busX ? -CARD_WIDTH / 2 : CARD_WIDTH / 2);
+            const isPathHighlighted = isParentHighlighted || highlightedPersonId === childId;
+            lines.push(
+              <path
+                key={`horizontal-child-link-${u.id}-${childId}`}
+                d={`M ${busX} ${startY} L ${busX} ${childPos.y} L ${childEdgeX} ${childPos.y}`}
+                className={`connection-line ${isPathHighlighted ? 'highlighted' : ''}`}
+              />
+            );
+          });
+          return;
+        }
 
         // Punto di partenza: connettore della coppia (o centro di p1 se genitore singolo).
         // Parte dal BORDO INFERIORE della card più bassa fra i due partner, così la linea
@@ -536,8 +1007,6 @@ export default function GenealogyTree({
         // Essendo calcolata dalle posizioni REALI (non da VERTICAL_GAP fisso), gli estremi
         // del gomito restano attaccati alle card durante il trascinamento.
         const busY = parentBottomY + (minChildTopY - parentBottomY) / 2;
-
-        const isParentHighlighted = highlightedPersonId === u.partner1_id || (p2 && highlightedPersonId === u.partner2_id);
 
         // Tratto verticale che scende dai genitori fino alla sbarra
         lines.push(
@@ -582,7 +1051,39 @@ export default function GenealogyTree({
     >
       {/* HUD Controls */}
       <div className="canvas-hud">
-        <div className="hud-panel glass hud-vertical">
+        <div className="hud-panel glass layout-mode-panel" onMouseDown={(e) => e.stopPropagation()}>
+          <label htmlFor="tree-layout-mode">Visualizzazione</label>
+          <select
+            id="tree-layout-mode"
+            className="form-control"
+            value={layoutMode}
+            onChange={(e) => handleLayoutModeChange(e.target.value)}
+          >
+            {LAYOUT_OPTIONS.map(option => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </div>
+        {layoutMode !== 'table' && <div className="hud-panel glass reset-positions-panel" onMouseDown={(e) => e.stopPropagation()}>
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={resetNodePositions}
+            title={includeSingleNodesInReset
+              ? 'Ripristina la posizione di tutti i nodi'
+              : 'Ripristina la posizione dei nodi appartenenti a coppie'}
+          >
+            <RefreshCw size={15} /> Reset posizioni
+          </button>
+          <label className="hud-checkbox-option" title="Includi nel reset anche le persone senza partner">
+            <input
+              type="checkbox"
+              checked={includeSingleNodesInReset}
+              onChange={(e) => setIncludeSingleNodesInReset(e.target.checked)}
+            />
+            <span>Anche singoli</span>
+          </label>
+        </div>}
+        {layoutMode !== 'table' && <div className="hud-panel glass hud-vertical">
           <button className="btn-icon" onClick={zoomIn} title="Zoom In">
             <ZoomIn size={18} />
           </button>
@@ -591,9 +1092,6 @@ export default function GenealogyTree({
           </button>
           <button className="btn-icon" onClick={resetPanZoom} title="Centra Albero">
             <Maximize size={18} />
-          </button>
-          <button className="btn-icon" onClick={resetLayout} title="Ripristina Layout Automatico">
-            <RefreshCw size={18} />
           </button>
           {canEdit && selectedPeople.size > 0 && (
             <button className="btn-icon btn-danger" onClick={() => {
@@ -605,9 +1103,67 @@ export default function GenealogyTree({
               <Trash2 size={18} />
             </button>
           )}
-        </div>
+        </div>}
       </div>
 
+      {layoutMode === 'table' ? (
+        <div className="genealogy-table-view" onMouseDown={(e) => e.stopPropagation()}>
+          <div className="genealogy-table-header">
+            <div>
+              <h3>Persone dell’albero</h3>
+              <p>Ordinate per generazione e cognome</p>
+            </div>
+            <span className="table-total-count">{tableRows.length} persone</span>
+          </div>
+          <div className="genealogy-table-scroll">
+            <table className="genealogy-data-table">
+              <thead>
+                <tr>
+                  <th>Generazione</th>
+                  <th>Persona</th>
+                  <th>Nascita / decesso</th>
+                  <th>Genitori</th>
+                  <th>Partner</th>
+                  <th>Figli</th>
+                  <th>Informazioni</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tableRows.map(({ person, generation, parents, partners, children }) => (
+                  <tr key={person.id} className={highlightedPersonId === person.id ? 'highlighted' : ''}>
+                    <td><span className="table-generation-badge">G{generation + 1}</span></td>
+                    <td>
+                      <button className="table-person-button" onClick={() => onSelectPerson(person)}>
+                        <span className={`node-avatar avatar-${person.gender}`}>
+                          {(person.first_name?.[0] || '')}{(person.last_name?.[0] || '')}
+                        </span>
+                        <span>
+                          <strong>{person.first_name} {person.last_name}</strong>
+                          {person.birth_place && <small>{person.birth_place}</small>}
+                        </span>
+                      </button>
+                    </td>
+                    <td>
+                      <span>{person.birth_date || '—'}</span>
+                      {person.death_date && <small>† {person.death_date}</small>}
+                    </td>
+                    <td>{parents || '—'}</td>
+                    <td>{partners || '—'}</td>
+                    <td>{children || '—'}</td>
+                    <td>
+                      <div className="table-info-badges">
+                        {person.illnesses?.length > 0 && <span>Salute: {person.illnesses.length}</span>}
+                        {person.notes && <span>Note</span>}
+                        {!person.illnesses?.length && !person.notes && <span className="muted">—</span>}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
       <div
         ref={canvasRef}
         className="canvas-content"
@@ -655,6 +1211,7 @@ export default function GenealogyTree({
           })}
         </div>
       </div>
+      )}
     </div>
   );
 }

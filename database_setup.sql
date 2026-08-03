@@ -38,12 +38,18 @@ create policy "Gli utenti possono modificare il proprio profilo (tranne ruoli)"
   using (auth.uid() = id)
   with check (auth.uid() = id);
 
+-- Limita gli aggiornamenti diretti ai soli dati anagrafici. I ruoli vengono
+-- modificati esclusivamente tramite funzioni amministrative controllate.
+revoke update on table public.profiles from authenticated;
+grant update (first_name, last_name) on table public.profiles to authenticated;
+
 -- Trigger per creare automaticamente il profilo utente alla registrazione
 create or replace function public.handle_new_user()
 returns trigger as $$
 declare
   is_first_user boolean;
 begin
+  perform pg_advisory_xact_lock(hashtext('genealogic-first-user'));
   -- Controlla se è il primo utente registrato per renderlo Admin e Approvato automaticamente
   select not exists (select 1 from public.profiles) into is_first_user;
   
@@ -62,6 +68,29 @@ $$ language plpgsql security definer;
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute procedure public.handle_new_user();
+
+create or replace function public.approve_user(target_user_id uuid)
+returns void as $$
+begin
+  if not exists (
+    select 1 from public.profiles
+    where id = auth.uid() and is_admin = true
+  ) then
+    raise exception 'Operazione riservata agli amministratori';
+  end if;
+
+  update public.profiles
+  set is_approved = true
+  where id = target_user_id;
+
+  if not found then
+    raise exception 'Utente non trovato';
+  end if;
+end;
+$$ language plpgsql security definer set search_path = public;
+
+revoke all on function public.approve_user(uuid) from public;
+grant execute on function public.approve_user(uuid) to authenticated;
 
 
 -- 3. Tabella Alberi Genealogici
@@ -91,6 +120,10 @@ create policy "Lettura alberi basata su visibilità"
       )
     )
     or owner_id = auth.uid()
+    or exists (
+      select 1 from public.profiles
+      where profiles.id = auth.uid() and profiles.is_admin = true
+    )
   );
 
 create policy "Creazione alberi per utenti approvati"
@@ -106,13 +139,22 @@ create policy "Creazione alberi per utenti approvati"
 create policy "Modifica alberi riservata ai proprietari"
   on public.trees for update
   to authenticated
-  using (owner_id = auth.uid())
-  with check (owner_id = auth.uid());
+  using (
+    owner_id = auth.uid()
+    or exists (select 1 from public.profiles where id = auth.uid() and is_admin = true)
+  )
+  with check (
+    owner_id = auth.uid()
+    or exists (select 1 from public.profiles where id = auth.uid() and is_admin = true)
+  );
 
 create policy "Cancellazione alberi riservata ai proprietari"
   on public.trees for delete
   to authenticated
-  using (owner_id = auth.uid());
+  using (
+    owner_id = auth.uid()
+    or exists (select 1 from public.profiles where id = auth.uid() and is_admin = true)
+  );
 
 
 -- 4. Tabella Persone (Membri degli alberi)
@@ -153,6 +195,10 @@ begin
       )
     )
     or t_owner = auth.uid()
+    or exists (
+      select 1 from public.profiles
+      where profiles.id = auth.uid() and profiles.is_admin = true
+    )
   );
 end;
 $$ language plpgsql security definer;
@@ -168,6 +214,10 @@ begin
   
   return (
     t_owner = auth.uid()
+    or exists (
+      select 1 from public.profiles
+      where profiles.id = auth.uid() and profiles.is_admin = true
+    )
     or (
       t_edit_perm = 'auth'
       and exists (
@@ -263,5 +313,19 @@ create policy "Gestione editori riservata al proprietario dell'albero"
     exists (
       select 1 from public.trees 
       where trees.id = tree_editors.tree_id and trees.owner_id = auth.uid()
+    )
+    or exists (
+      select 1 from public.profiles
+      where profiles.id = auth.uid() and profiles.is_admin = true
+    )
+  )
+  with check (
+    exists (
+      select 1 from public.trees
+      where trees.id = tree_editors.tree_id and trees.owner_id = auth.uid()
+    )
+    or exists (
+      select 1 from public.profiles
+      where profiles.id = auth.uid() and profiles.is_admin = true
     )
   );

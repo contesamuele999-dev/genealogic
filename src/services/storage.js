@@ -1,5 +1,5 @@
-import { supabase, isSupabaseConfigured } from './supabaseClient';
-import { generateUUID } from './xmindParser';
+import { supabase, isSupabaseConfigured } from './supabaseClient.js';
+import { generateUUID } from './xmindParser.js';
 
 // ==========================================
 // SEZIONE LOCAL STORAGE (MOCK DATABASE)
@@ -149,6 +149,11 @@ export const storage = {
   },
 
   async getPendingUsers() {
+    const currentUser = await this.getCurrentUser();
+    if (!currentUser?.is_admin) {
+      throw new Error('Solo un amministratore può visualizzare gli utenti in attesa.');
+    }
+
     if (isSupabaseConfigured) {
       const { data, error } = await supabase
         .from('profiles')
@@ -165,11 +170,15 @@ export const storage = {
   },
 
   async approveUser(userId) {
+    const currentUser = await this.getCurrentUser();
+    if (!currentUser?.is_admin) {
+      throw new Error('Solo un amministratore può approvare gli utenti.');
+    }
+
     if (isSupabaseConfigured) {
-      const { error } = await supabase
-        .from('profiles')
-        .update({ is_approved: true })
-        .eq('id', userId);
+      const { error } = await supabase.rpc('approve_user', {
+        target_user_id: userId
+      });
       if (error) throw error;
     } else {
       // Local Mock
@@ -281,6 +290,10 @@ export const storage = {
   },
 
   async updateTree(treeId, name, description, visibility, editPermission) {
+    if (!await this.canManageTree(treeId)) {
+      throw new Error('Solo il proprietario o un amministratore può modificare le impostazioni dell’albero.');
+    }
+
     if (isSupabaseConfigured) {
       const { data, error } = await supabase
         .from('trees')
@@ -314,6 +327,10 @@ export const storage = {
   },
 
   async deleteTree(treeId) {
+    if (!await this.canManageTree(treeId)) {
+      throw new Error('Solo il proprietario o un amministratore può eliminare l’albero.');
+    }
+
     if (isSupabaseConfigured) {
       const { error } = await supabase
         .from('trees')
@@ -356,6 +373,10 @@ export const storage = {
   },
 
   async setTreeEditors(treeId, userIds) {
+    if (!await this.canManageTree(treeId)) {
+      throw new Error('Solo il proprietario o un amministratore può gestire gli editor dell’albero.');
+    }
+
     if (isSupabaseConfigured) {
       // 1. Cancella vecchi editori
       const { error: delErr } = await supabase
@@ -420,6 +441,24 @@ export const storage = {
       const editors = getLocalData('genealogy_tree_editors');
       return editors.some(e => e.tree_id === treeId && e.user_id === user.id);
     }
+  },
+
+  async canManageTree(treeId) {
+    const user = await this.getCurrentUser();
+    if (!user) return false;
+    if (user.is_admin) return true;
+
+    if (isSupabaseConfigured) {
+      const { data: tree, error } = await supabase
+        .from('trees')
+        .select('owner_id')
+        .eq('id', treeId)
+        .single();
+      return !error && tree?.owner_id === user.id;
+    }
+
+    const trees = getLocalData('genealogy_trees');
+    return trees.some(tree => tree.id === treeId && tree.owner_id === user.id);
   },
 
   // ----------------------------------------
@@ -545,7 +584,25 @@ export const storage = {
     if (!canWrite) throw new Error('Non hai i permessi per modificare questo albero.');
 
     if (isSupabaseConfigured) {
-      // Rimuove la persona
+      // children_ids non ha un vincolo FK: va ripulito esplicitamente prima
+      // della cancellazione, altrimenti rimangono riferimenti orfani.
+      const { data: childUnions, error: childLookupError } = await supabase
+        .from('unions')
+        .select('*')
+        .eq('tree_id', treeId)
+        .contains('children_ids', [personId]);
+      if (childLookupError) throw childLookupError;
+
+      for (const union of childUnions || []) {
+        const { error: cleanupError } = await supabase
+          .from('unions')
+          .update({
+            children_ids: union.children_ids.filter(childId => childId !== personId)
+          })
+          .eq('id', union.id);
+        if (cleanupError) throw cleanupError;
+      }
+
       const { error } = await supabase
         .from('people')
         .delete()

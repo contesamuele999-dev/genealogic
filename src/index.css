@@ -524,6 +524,214 @@ button, input, select, textarea {
   flex-direction: column;
 }
 
+.layout-mode-panel {
+  align-items: stretch;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px;
+}
+
+.layout-mode-panel label {
+  padding: 0 3px;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.layout-mode-panel .form-control {
+  min-width: 176px;
+  padding: 7px 28px 7px 9px;
+  font-size: 0.78rem;
+}
+
+.reset-positions-panel {
+  align-items: stretch;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px;
+}
+
+.reset-positions-panel .btn {
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.hud-checkbox-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.hud-checkbox-option input {
+  accent-color: var(--accent-teal);
+}
+
+/* Vista tabellare dell'albero */
+.genealogy-table-view {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 24px 224px 24px 24px;
+  background: var(--bg-canvas);
+}
+
+.genealogy-table-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.genealogy-table-header h3 {
+  font-size: 1.05rem;
+}
+
+.genealogy-table-header p {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.table-total-count,
+.table-generation-badge {
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.table-total-count {
+  padding: 6px 10px;
+}
+
+.table-generation-badge {
+  display: inline-flex;
+  min-width: 32px;
+  justify-content: center;
+  padding: 4px 7px;
+  color: var(--accent-teal);
+}
+
+.genealogy-table-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg-card) 82%, transparent);
+  box-shadow: var(--shadow-md);
+}
+
+.genealogy-data-table {
+  width: 100%;
+  min-width: 1120px;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.genealogy-data-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.03em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.genealogy-data-table td {
+  max-width: 250px;
+  padding: 10px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-color) 65%, transparent);
+  color: var(--text-main);
+  line-height: 1.35;
+  vertical-align: middle;
+}
+
+.genealogy-data-table tbody tr {
+  transition: background-color var(--transition-fast);
+}
+
+.genealogy-data-table tbody tr:hover,
+.genealogy-data-table tbody tr.highlighted {
+  background: color-mix(in srgb, var(--accent-teal) 9%, transparent);
+}
+
+.genealogy-data-table td > small,
+.table-person-button small {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+
+.table-person-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.table-person-button:hover strong {
+  color: var(--accent-teal);
+}
+
+.table-person-button .node-avatar {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  font-size: 0.68rem;
+}
+
+.table-info-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.table-info-badges span {
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent-teal) 12%, transparent);
+  color: var(--accent-teal);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+.table-info-badges span.muted {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+@media (max-width: 900px) {
+  .genealogy-table-view {
+    padding: 16px 16px 112px;
+  }
+}
+
 /* Panel laterale */
 .side-panel {
   position: absolute;

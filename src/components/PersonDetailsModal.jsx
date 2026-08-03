@@ -43,24 +43,32 @@ export default function PersonDetailsModal({
     }
   }, [person]);
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!firstName.trim()) {
       alert('Il nome è obbligatorio.');
       return;
     }
 
-    onSave(person.id, {
-      tree_id: person.tree_id,
-      first_name: firstName,
-      last_name: lastName,
-      gender,
-      birth_date: birthDate,
-      death_date: deathDate,
-      birth_place: birthPlace,
-      notes,
-      illnesses
-    });
-    setIsEditing(false);
+    try {
+      await onSave(person.id, {
+        tree_id: person.tree_id,
+        first_name: firstName,
+        last_name: lastName,
+        gender,
+        birth_date: birthDate,
+        death_date: deathDate,
+        birth_place: birthPlace,
+        notes,
+        illnesses
+      });
+    } catch {
+      return;
+    }
+    if (person.id === 'new') {
+      onClose();
+    } else {
+      setIsEditing(false);
+    }
   };
 
   const handleAddIllness = () => {

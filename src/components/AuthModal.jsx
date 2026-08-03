@@ -35,7 +35,7 @@ export default function AuthModal({ onClose, onAuthSuccess }) {
         await storage.signIn(email, password);
       }
       
-      onAuthSuccess();
+      await onAuthSuccess();
       onClose();
     } catch (err) {
       setErrorMsg(err.message || 'Si è verificato un errore durante l\'autenticazione.');

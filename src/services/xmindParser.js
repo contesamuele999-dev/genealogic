@@ -103,7 +103,7 @@ function parseMetadata(str) {
 
       // Rileva date (formati: 22/05/1862, 1862, 22/05/1862 - 11/02/1909, 5-6/11/1928)
       // Data di nascita (prima parte della range o singola)
-      const datePattern = /(\d{1,2}\/\d{1,2}\/\d{4}|\d{4})\s*(?:-|\–|–)\s*(\d{1,2}\/\d{1,2}\/\d{4}|\d{4})?/i;
+      const datePattern = /(\d{1,2}\/\d{1,2}\/\d{4}|\d{4})\s*(?:-|–)\s*(\d{1,2}\/\d{1,2}\/\d{4}|\d{4})?/i;
       const dateMatch = content.match(datePattern);
 
       if (dateMatch) {

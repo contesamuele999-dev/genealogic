@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Upload, FileText, Download, AlertCircle, Check } from 'lucide-react';
+import { X, Upload, FileText, AlertCircle, Check } from 'lucide-react';
 import { parseTextOutline, parseXMindFile } from '../services/xmindParser';
 
 export default function ImportExport({ treeId, onImportComplete, onClose }) {
@@ -9,7 +9,7 @@ export default function ImportExport({ treeId, onImportComplete, onClose }) {
   const [successMsg, setSuccessMsg] = useState('');
   const [isDragOver, setIsDragOver] = useState(false);
 
-  const handleTextImport = () => {
+  const handleTextImport = async () => {
     setErrorMsg('');
     setSuccessMsg('');
     if (!textOutline.trim()) {
@@ -23,7 +23,7 @@ export default function ImportExport({ treeId, onImportComplete, onClose }) {
         setErrorMsg('Nessun familiare rilevato. Verifica la formattazione.');
         return;
       }
-      onImportComplete(people, unions);
+      await onImportComplete(people, unions);
       setSuccessMsg(`Importazione completata con successo! Caricati ${people.length} persone e ${unions.length} unioni.`);
       setTextOutline('');
     } catch (err) {
@@ -50,7 +50,7 @@ export default function ImportExport({ treeId, onImportComplete, onClose }) {
             setErrorMsg('Nessun nodo trovato nella mappa mentale.');
             return;
           }
-          onImportComplete(people, unions);
+          await onImportComplete(people, unions);
           setSuccessMsg(`Importazione XMind riuscita! Rilevati ${people.length} familiari e ${unions.length} unioni.`);
         } catch (err) {
           setErrorMsg(`Errore nell'estrazione del file XMind: ${err.message}`);

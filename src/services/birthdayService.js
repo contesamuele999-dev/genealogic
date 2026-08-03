@@ -17,6 +17,7 @@ function parseBirthDayMonth(dateStr) {
   if (slashMatch) {
     const day = parseInt(slashMatch[1], 10);
     const month = parseInt(slashMatch[2], 10) - 1; // 0-indexed per JavaScript Date
+    if (!isValidDayMonth(day, month)) return null;
     return { day, month };
   }
 
@@ -25,10 +26,20 @@ function parseBirthDayMonth(dateStr) {
   if (isoMatch) {
     const day = parseInt(isoMatch[3], 10);
     const month = parseInt(isoMatch[2], 10) - 1;
+    if (!isValidDayMonth(day, month)) return null;
     return { day, month };
   }
 
   return null;
+}
+
+function isValidDayMonth(day, month) {
+  if (!Number.isInteger(day) || !Number.isInteger(month) || month < 0 || month > 11) {
+    return false;
+  }
+  // Il 2000 mantiene valido il 29 febbraio.
+  const candidate = new Date(Date.UTC(2000, month, day));
+  return candidate.getUTCMonth() === month && candidate.getUTCDate() === day;
 }
 
 /**
@@ -48,8 +59,8 @@ function calculateTurningAge(dateStr) {
 /**
  * Trova i compleanni imminenti dei parenti IN VITA entro un certo numero di giorni (default 60 giorni)
  */
-export function getUpcomingBirthdays(people = [], daysThreshold = 60) {
-  const today = new Date();
+export function getUpcomingBirthdays(people = [], daysThreshold = 60, referenceDate = new Date()) {
+  const today = new Date(referenceDate);
   today.setHours(0, 0, 0, 0);
 
   const upcoming = [];
@@ -70,17 +81,22 @@ export function getUpcomingBirthdays(people = [], daysThreshold = 60) {
       nextBirthday = new Date(currentYear + 1, parsed.month, parsed.day);
     }
 
-    const diffTime = nextBirthday.getTime() - today.getTime();
-    const daysRemaining = Math.ceil(diffTime / (1000 * 3600 * 24));
+    // Il calcolo in UTC evita scarti di un giorno nei cambi ora legale/solare.
+    const todayUtc = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+    const birthdayUtc = Date.UTC(nextBirthday.getFullYear(), nextBirthday.getMonth(), nextBirthday.getDate());
+    const daysRemaining = Math.round((birthdayUtc - todayUtc) / 86400000);
 
     if (daysRemaining <= daysThreshold) {
-      const turningAge = calculateTurningAge(person.birth_date);
+      const currentAge = calculateTurningAge(person.birth_date);
+      const birthYearMatch = person.birth_date.match(/\d{4}/);
 
       upcoming.push({
         person,
         daysRemaining,
         nextBirthday,
-        turningAge: turningAge ? (nextBirthday.getFullYear() - parseInt(person.birth_date.match(/\d{4}/)[0])) : null
+        turningAge: currentAge !== null && birthYearMatch
+          ? nextBirthday.getFullYear() - parseInt(birthYearMatch[0], 10)
+          : null
       });
     }
   });

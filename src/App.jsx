@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Network, Plus, ShieldAlert, LogIn, LogOut, Settings, Upload, AlertCircle, Cake } from 'lucide-react';
 import { storage } from './services/storage';
 import { generateUUID } from './services/xmindParser';
@@ -21,6 +21,8 @@ export default function App() {
   const [people, setPeople] = useState([]);
   const [unions, setUnions] = useState([]);
   const [canEdit, setCanEdit] = useState(false);
+  const [canManageTree, setCanManageTree] = useState(false);
+  const treeLoadRequestRef = useRef(0);
 
   // Stati di evidenziazione e modali
   const [selectedPerson, setSelectedPerson] = useState(null);
@@ -35,26 +37,26 @@ export default function App() {
   const [showBirthdays, setShowBirthdays] = useState(false);
 
   // Carica i dati utente
-  const loadUser = async () => {
+  const loadUser = useCallback(async () => {
     try {
       const user = await storage.getCurrentUser();
       setCurrentUser(user);
     } catch (err) {
       console.error(err);
     }
-  };
+  }, []);
 
   // Carica la lista degli alberi visibili
-  const loadTrees = async () => {
+  const loadTrees = useCallback(async () => {
     try {
       const list = await storage.getTrees();
       setTrees(list);
       
       // Imposta il primo albero come attivo se non ne è già selezionato uno valido
       if (list.length > 0) {
-        if (!activeTreeId || !list.some(t => t.id === activeTreeId)) {
-          setActiveTreeId(list[0].id);
-        }
+        setActiveTreeId(currentId => (
+          currentId && list.some(tree => tree.id === currentId) ? currentId : list[0].id
+        ));
       } else {
         setActiveTreeId('');
         setPeople([]);
@@ -63,24 +65,36 @@ export default function App() {
     } catch (err) {
       console.error(err);
     }
-  };
+  }, []);
 
   // Carica persone, unioni e permessi per l'albero attivo
-  const loadTreeDetails = async () => {
-    if (!activeTreeId) return;
+  const loadTreeDetails = useCallback(async () => {
+    if (!activeTreeId) {
+      setPeople([]);
+      setUnions([]);
+      setCanEdit(false);
+      setCanManageTree(false);
+      return;
+    }
+
+    const requestId = ++treeLoadRequestRef.current;
 
     try {
-      const pList = await storage.getPeople(activeTreeId);
-      const uList = await storage.getUnions(activeTreeId);
+      const [pList, uList, writePermission, managePermission] = await Promise.all([
+        storage.getPeople(activeTreeId),
+        storage.getUnions(activeTreeId),
+        storage.canWriteTree(activeTreeId),
+        storage.canManageTree(activeTreeId)
+      ]);
+      if (requestId !== treeLoadRequestRef.current) return;
       setPeople(pList);
       setUnions(uList);
-
-      const writePermission = await storage.canWriteTree(activeTreeId);
       setCanEdit(writePermission);
+      setCanManageTree(managePermission);
     } catch (err) {
       console.error(err);
     }
-  };
+  }, [activeTreeId]);
 
   // Inizializzazione iniziale
   useEffect(() => {
@@ -88,18 +102,18 @@ export default function App() {
       await loadUser();
     };
     init();
-  }, []);
+  }, [loadUser]);
 
   // Ricarica alberi quando cambia l'utente (cambiano i suoi permessi)
   useEffect(() => {
     loadTrees();
-  }, [currentUser]);
+  }, [currentUser, loadTrees]);
 
   // Ricarica dettagli quando cambia l'albero selezionato
   useEffect(() => {
     loadTreeDetails();
     setHighlightedPersonId(null);
-  }, [activeTreeId]);
+  }, [activeTreeId, loadTreeDetails]);
 
   const handleCreateTree = async () => {
     const name = window.prompt("Inserisci il nome del nuovo Albero Genealogico:");
@@ -127,6 +141,7 @@ export default function App() {
       loadTrees();
     } catch (err) {
       alert(err.message);
+      throw err;
     }
   };
 
@@ -148,6 +163,7 @@ export default function App() {
       loadTreeDetails();
     } catch (err) {
       alert(err.message);
+      throw err;
     }
   };
 
@@ -186,9 +202,10 @@ export default function App() {
     const { person: target, relation } = relativeToAdd;
     const newPersonId = generateUUID();
 
+    let newPerson = null;
     try {
       // 1. Crea la nuova persona nel database
-      const newPerson = await storage.addPerson({
+      newPerson = await storage.addPerson({
         ...relativeData,
         id: newPersonId,
         tree_id: activeTreeId
@@ -240,7 +257,15 @@ export default function App() {
       // Centra sul nuovo nodo inserito
       setHighlightedPersonId(newPerson.id);
     } catch (err) {
+      if (newPerson) {
+        try {
+          await storage.deletePerson(newPerson.id);
+        } catch (rollbackError) {
+          console.error('Impossibile annullare la persona creata dopo l’errore:', rollbackError);
+        }
+      }
       alert(`Errore nell'aggiunta del familiare: ${err.message}`);
+      throw err;
     }
   };
 
@@ -249,9 +274,10 @@ export default function App() {
     if (!activeTreeId) return;
     try {
       await storage.importTreeData(activeTreeId, importedPeople, importedUnions, true);
-      loadTreeDetails();
+      await loadTreeDetails();
     } catch (err) {
       alert(`Errore di importazione: ${err.message}`);
+      throw err;
     }
   };
 
@@ -277,7 +303,13 @@ export default function App() {
             <select
               className="tree-select"
               value={activeTreeId}
-              onChange={(e) => setActiveTreeId(e.target.value)}
+              onChange={(e) => {
+                setPeople([]);
+                setUnions([]);
+                setCanEdit(false);
+                setCanManageTree(false);
+                setActiveTreeId(e.target.value);
+              }}
             >
               {trees.map(t => (
                 <option key={t.id} value={t.id}>
@@ -332,9 +364,11 @@ export default function App() {
               <button className="btn btn-secondary" onClick={() => setShowImportExport(true)} title="Importa / Esporta">
                 <Upload size={16} /> Importa/Esporta
               </button>
-              <button className="btn btn-secondary" onClick={() => setShowTreeSettings(true)} title="Impostazioni Albero">
-                <Settings size={16} /> Impostazioni
-              </button>
+              {canManageTree && (
+                <button className="btn btn-secondary" onClick={() => setShowTreeSettings(true)} title="Impostazioni Albero">
+                  <Settings size={16} /> Impostazioni
+                </button>
+              )}
             </>
           )}
 
@@ -363,6 +397,7 @@ export default function App() {
       {/* Main Workspace */}
       {activeTreeId ? (
         <GenealogyTree
+          treeId={activeTreeId}
           people={people}
           unions={unions}
           onSelectPerson={setSelectedPerson}
