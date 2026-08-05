@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Plus, HeartPulse, FileText, UserPlus, Heart, Link } from 'lucide-react';
+import { Plus, HeartPulse, FileText, UserPlus, Heart, Link, GitMerge } from 'lucide-react';
 
 export default function NodeCard({
   person,
@@ -39,11 +39,33 @@ export default function NodeCard({
   const hasIllnesses = healthVisible && Array.isArray(person.illnesses) && person.illnesses.length > 0;
   const hasNotes = person.notes && person.notes.trim().length > 0;
 
+  // Nodo proveniente da un albero collegato: si vede, non si tocca.
+  const isForeign = !!person.is_foreign;
+  // Persona di questo albero che esiste anche in uno o più rami agganciati.
+  const sharedWith = Array.isArray(person.linked_trees) ? person.linked_trees : [];
+
   return (
     <div
-      className={`node-card glass glass-hover gender-${person.gender} ${highlighted ? 'highlighted' : ''}`}
+      className={`node-card glass glass-hover gender-${person.gender} ${highlighted ? 'highlighted' : ''} ${isForeign ? 'node-foreign' : ''} ${!isForeign && sharedWith.length > 0 ? 'node-shared' : ''}`}
       onClick={onClick}
+      title={isForeign
+        ? `Nodo dell'albero collegato "${person.origin_tree_name || ''}" — sola lettura`
+        : sharedWith.length > 0
+          ? `Persona condivisa con: ${sharedWith.join(', ')}`
+          : undefined}
     >
+      {isForeign && (
+        <span className="node-origin-tag" title={person.origin_tree_name}>
+          <GitMerge size={9} />
+          {person.origin_tree_name || 'Ramo collegato'}
+        </span>
+      )}
+      {!isForeign && sharedWith.length > 0 && (
+        <span className="node-origin-tag node-origin-shared" title={`Condivisa con: ${sharedWith.join(', ')}`}>
+          <GitMerge size={9} />
+          {sharedWith.length}
+        </span>
+      )}
       <div className="node-card-header">
         <div className={`node-avatar avatar-${person.gender}`}>
           {getInitials()}
@@ -80,8 +102,8 @@ export default function NodeCard({
         </div>
       )}
 
-      {/* Pulsanti di aggiunta rapida sul hover */}
-      {canEdit && (
+      {/* Pulsanti di aggiunta rapida sul hover (mai sui nodi di alberi altrui) */}
+      {canEdit && !isForeign && (
         <div className="quick-actions" onMouseLeave={handleQuickAddMouseLeave}>
           <button
             className="btn-quick-add"

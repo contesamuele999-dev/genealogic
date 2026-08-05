@@ -1498,3 +1498,212 @@ select.form-control {
   flex-direction: column;
   gap: 16px;
 }
+
+.health-permission-hint {
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--text-muted);
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px dashed rgba(138, 43, 226, 0.35);
+  background: rgba(138, 43, 226, 0.06);
+}
+
+/* ============================================================
+   Innesti fra alberi (rami collegati)
+   ============================================================ */
+.node-card.node-foreign {
+  border-style: dashed;
+  border-color: rgba(0, 242, 254, 0.45);
+  opacity: 0.9;
+  cursor: default;
+}
+
+.node-card.node-foreign:hover {
+  opacity: 1;
+  border-color: rgba(0, 242, 254, 0.7);
+}
+
+.node-origin-tag {
+  position: absolute;
+  top: -9px;
+  left: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: calc(100% - 24px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--bg-popover);
+  border: 1px solid rgba(0, 242, 254, 0.45);
+  color: var(--accent-teal);
+  z-index: 2;
+}
+
+.node-origin-tag.node-origin-shared {
+  left: auto;
+  right: 10px;
+  border-color: rgba(138, 43, 226, 0.5);
+  color: #d8b4fe;
+}
+
+.node-card.node-shared {
+  border-color: rgba(138, 43, 226, 0.35);
+}
+
+.links-modal .modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.tree-link-section-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 10px;
+}
+
+.tree-link-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tree-link-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.tree-link-item.status-pending {
+  border-color: rgba(245, 166, 35, 0.4);
+  background: rgba(245, 166, 35, 0.06);
+}
+
+.tree-link-item.status-rejected {
+  opacity: 0.55;
+}
+
+.tree-link-main {
+  flex: 1;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tree-link-people {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 0.9rem;
+}
+
+.tree-link-arrow {
+  color: var(--accent-teal);
+  font-weight: 700;
+}
+
+.tree-link-meta {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.tree-link-badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.tree-link-badge.status-approved {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--accent-emerald);
+}
+
+.tree-link-badge.status-pending {
+  background: rgba(245, 166, 35, 0.18);
+  color: var(--accent-amber);
+}
+
+.tree-link-badge.status-rejected {
+  background: rgba(244, 63, 94, 0.15);
+  color: var(--accent-rose);
+}
+
+.tree-link-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.tree-link-actions .btn {
+  padding: 6px 10px;
+  font-size: 0.78rem;
+}
+
+/* Utility minime usate dai pulsanti dell'header */
+.flex-align {
+  display: inline-flex;
+  align-items: center;
+}
+
+.gap-6 { gap: 6px; }
+.relative { position: relative; }
+
+.badge-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text-main);
+}
+
+.badge-count-alert {
+  background: var(--accent-amber);
+  color: var(--text-inverse);
+}
+
+.btn-linked-on {
+  background: rgba(0, 242, 254, 0.15);
+  border: 1px solid rgba(0, 242, 254, 0.5);
+  color: var(--accent-teal);
+}
+
+.btn-linked-on:hover {
+  background: rgba(0, 242, 254, 0.25);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

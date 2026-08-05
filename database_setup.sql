@@ -101,6 +101,10 @@ create table public.trees (
   owner_id uuid references public.profiles(id) on delete cascade not null,
   visibility text default 'public' check (visibility in ('public', 'restricted', 'private')),
   edit_permission text default 'owner' check (edit_permission in ('owner', 'auth', 'specific')),
+  -- I dati clinici hanno una visibilità propria, indipendente da quella dell'albero.
+  health_permission text not null default 'owner' check (health_permission in ('owner', 'editors', 'auth', 'all')),
+  -- Chi può agganciare il proprio albero a questo (vedi database_migration_tree_links).
+  link_permission text not null default 'moderated' check (link_permission in ('none', 'moderated', 'auth', 'all')),
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 

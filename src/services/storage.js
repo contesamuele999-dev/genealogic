@@ -1,5 +1,6 @@
 import { supabase, isSupabaseConfigured } from './supabaseClient.js';
 import { generateUUID } from './xmindParser.js';
+import { mergeLinkedTrees, collectLinkedTreeIds } from './treeMerge.js';
 
 // ==========================================
 // SEZIONE LOCAL STORAGE (MOCK DATABASE)
@@ -32,6 +33,9 @@ const initLocalMockData = () => {
   }
   if (!localStorage.getItem('genealogy_change_requests')) {
     setLocalData('genealogy_change_requests', []);
+  }
+  if (!localStorage.getItem('genealogy_tree_links')) {
+    setLocalData('genealogy_tree_links', []);
   }
 };
 
@@ -255,7 +259,7 @@ export const storage = {
     }
   },
 
-  async createTree(name, description, visibility = 'public', editPermission = 'owner') {
+  async createTree(name, description, visibility = 'public', editPermission = 'owner', healthPermission = 'owner', linkPermission = 'moderated') {
     const user = await this.getCurrentUser();
     if (!user) throw new Error('Devi essere autenticato per creare un albero.');
     if (!user.is_approved) throw new Error('Il tuo account è in attesa di approvazione da parte di un amministratore.');
@@ -268,6 +272,8 @@ export const storage = {
           description,
           visibility,
           edit_permission: editPermission,
+          health_permission: healthPermission,
+          link_permission: linkPermission,
           owner_id: user.id
         })
         .select()
@@ -283,6 +289,8 @@ export const storage = {
         description,
         visibility,
         edit_permission: editPermission,
+        health_permission: healthPermission,
+        link_permission: linkPermission,
         owner_id: user.id,
         created_at: new Date().toISOString()
       };
@@ -292,7 +300,7 @@ export const storage = {
     }
   },
 
-  async updateTree(treeId, name, description, visibility, editPermission) {
+  async updateTree(treeId, name, description, visibility, editPermission, healthPermission = 'owner', linkPermission = 'moderated') {
     if (!await this.canManageTree(treeId)) {
       throw new Error('Solo il proprietario o un amministratore può modificare le impostazioni dell’albero.');
     }
@@ -304,7 +312,9 @@ export const storage = {
           name,
           description,
           visibility,
-          edit_permission: editPermission
+          edit_permission: editPermission,
+          health_permission: healthPermission,
+          link_permission: linkPermission
         })
         .eq('id', treeId)
         .select()
@@ -320,7 +330,9 @@ export const storage = {
           name,
           description,
           visibility,
-          edit_permission: editPermission
+          edit_permission: editPermission,
+          health_permission: healthPermission,
+          link_permission: linkPermission
         };
         setLocalData('genealogy_trees', trees);
         return trees[idx];
@@ -515,6 +527,33 @@ export const storage = {
     request.status = approve ? 'approved' : 'rejected';
     request.reviewed_at = new Date().toISOString();
     setLocalData('genealogy_change_requests', requests);
+  },
+
+  // I dati clinici hanno una visibilità propria, distinta da quella dell'albero:
+  // è governata dal campo health_permission impostabile dalle Impostazioni Albero.
+  async canViewHealthTree(treeId) {
+    if (!treeId) return false;
+    const user = await this.getCurrentUser();
+
+    if (isSupabaseConfigured) {
+      const { data, error } = await supabase.rpc('can_view_health_tree', { target_tree_id: treeId });
+      if (!error) return data === true;
+
+      // Fallback se la migrazione non è ancora stata eseguita: solo proprietario/admin.
+      console.warn('can_view_health_tree non disponibile, fallback al proprietario:', error.message);
+      return this.canManageTree(treeId);
+    }
+
+    const tree = getLocalData('genealogy_trees').find(t => t.id === treeId);
+    if (!tree) return false;
+    if (user?.is_admin) return true;
+    if (tree.owner_id === user?.id) return true;
+
+    const permission = tree.health_permission || 'owner';
+    if (permission === 'all') return true;
+    if (permission === 'auth') return !!user?.is_approved;
+    if (permission === 'editors') return this.canWriteTree(treeId);
+    return false;
   },
 
   async canManageTree(treeId) {
@@ -826,6 +865,309 @@ export const storage = {
    * Importa in blocco persone e unioni in un albero esistente.
    * Cancella i vecchi dati se richiesto (overwrite)
    */
+  // ----------------------------------------
+  // INNESTI FRA ALBERI (tree_links)
+  //
+  // Un innesto dichiara che una persona del MIO albero è la stessa persona reale di
+  // un nodo nell'albero di qualcun altro. I due alberi restano distinti: nessuno
+  // scrive sull'albero altrui, la fusione avviene solo in visualizzazione.
+  // ----------------------------------------
+
+  async canLinkTree(treeId) {
+    if (!treeId) return false;
+
+    if (isSupabaseConfigured) {
+      const { data, error } = await supabase.rpc('can_link_tree', { target_tree_id: treeId });
+      if (!error) return data === true;
+      console.warn('can_link_tree non disponibile:', error.message);
+      return false;
+    }
+
+    const user = await this.getCurrentUser();
+    const tree = getLocalData('genealogy_trees').find(t => t.id === treeId);
+    if (!tree) return false;
+    if (user?.is_admin || tree.owner_id === user?.id) return true;
+
+    const permission = tree.link_permission || 'moderated';
+    if (permission === 'none') return false;
+    if (permission === 'all') return true;
+    return !!user?.is_approved;
+  },
+
+  /**
+   * Restituisce gli innesti che coinvolgono l'albero indicato, sia come ramo
+   * (source) sia come albero principale (target).
+   */
+  async getTreeLinks(treeId, { status = null } = {}) {
+    if (!treeId) return [];
+
+    if (isSupabaseConfigured) {
+      let query = supabase
+        .from('tree_links')
+        .select('*')
+        .or(`source_tree_id.eq.${treeId},target_tree_id.eq.${treeId}`);
+      if (status) query = query.eq('status', status);
+
+      const { data, error } = await query;
+      if (error) {
+        console.warn('Lettura innesti non riuscita:', error.message);
+        return [];
+      }
+      return data || [];
+    }
+
+    const links = getLocalData('genealogy_tree_links');
+    return links.filter(link =>
+      (link.source_tree_id === treeId || link.target_tree_id === treeId)
+      && (!status || link.status === status)
+    );
+  },
+
+  /**
+   * Richiede l'innesto del proprio ramo su una persona di un altro albero.
+   * Lo stato finale (pending o approved) lo decide il database in base al
+   * link_permission dell'albero di destinazione.
+   */
+  async requestTreeLink({ sourceTreeId, sourcePersonId, targetTreeId, targetPersonId, note = '' }) {
+    if (!sourceTreeId || !sourcePersonId || !targetTreeId || !targetPersonId) {
+      throw new Error('Seleziona la persona del tuo albero e quella dell’albero di destinazione.');
+    }
+    if (sourceTreeId === targetTreeId) {
+      throw new Error('Non puoi innestare un albero su sé stesso.');
+    }
+    if (!await this.canWriteTree(sourceTreeId)) {
+      throw new Error('Puoi proporre un innesto solo da un albero che puoi modificare.');
+    }
+    if (!await this.canLinkTree(targetTreeId)) {
+      throw new Error('Questo albero non accetta innesti.');
+    }
+
+    if (isSupabaseConfigured) {
+      const { data, error } = await supabase
+        .from('tree_links')
+        .insert({
+          source_tree_id: sourceTreeId,
+          source_person_id: sourcePersonId,
+          target_tree_id: targetTreeId,
+          target_person_id: targetPersonId,
+          note: note || null
+        })
+        .select()
+        .single();
+      if (error) throw new Error(error.message);
+      return data;
+    }
+
+    const user = await this.getCurrentUser();
+    const links = getLocalData('genealogy_tree_links');
+    if (links.some(l => l.source_person_id === sourcePersonId && l.target_person_id === targetPersonId)) {
+      throw new Error('Questo innesto esiste già.');
+    }
+
+    const targetTree = getLocalData('genealogy_trees').find(t => t.id === targetTreeId);
+    const permission = targetTree?.link_permission || 'moderated';
+    const autoApprove = targetTree?.owner_id === user?.id || user?.is_admin || permission === 'auth' || permission === 'all';
+
+    const link = {
+      id: generateUUID(),
+      source_tree_id: sourceTreeId,
+      source_person_id: sourcePersonId,
+      target_tree_id: targetTreeId,
+      target_person_id: targetPersonId,
+      note: note || null,
+      status: autoApprove ? 'approved' : 'pending',
+      requested_by: user?.id || null,
+      reviewed_by: autoApprove ? (user?.id || null) : null,
+      reviewed_at: autoApprove ? new Date().toISOString() : null,
+      created_at: new Date().toISOString()
+    };
+    links.push(link);
+    setLocalData('genealogy_tree_links', links);
+    return link;
+  },
+
+  async reviewTreeLink(linkId, approve) {
+    if (isSupabaseConfigured) {
+      const { data, error } = await supabase.rpc('review_tree_link', { link_id: linkId, approve });
+      if (error) throw new Error(error.message);
+      return data;
+    }
+
+    const user = await this.getCurrentUser();
+    const links = getLocalData('genealogy_tree_links');
+    const index = links.findIndex(l => l.id === linkId);
+    if (index === -1) throw new Error('Innesto non trovato.');
+    if (!await this.canWriteTree(links[index].target_tree_id)) {
+      throw new Error('Non hai i permessi per approvare questo innesto.');
+    }
+
+    links[index] = {
+      ...links[index],
+      status: approve ? 'approved' : 'rejected',
+      reviewed_by: user?.id || null,
+      reviewed_at: new Date().toISOString()
+    };
+    setLocalData('genealogy_tree_links', links);
+    return links[index];
+  },
+
+  async deleteTreeLink(linkId) {
+    if (isSupabaseConfigured) {
+      const { error } = await supabase.from('tree_links').delete().eq('id', linkId);
+      if (error) throw new Error(error.message);
+      return true;
+    }
+
+    const links = getLocalData('genealogy_tree_links');
+    const link = links.find(l => l.id === linkId);
+    if (!link) return true;
+    const allowed = await this.canWriteTree(link.source_tree_id) || await this.canWriteTree(link.target_tree_id);
+    if (!allowed) throw new Error('Non hai i permessi per rimuovere questo innesto.');
+
+    setLocalData('genealogy_tree_links', links.filter(l => l.id !== linkId));
+    return true;
+  },
+
+  /**
+   * Carica l'albero indicato più tutti i rami approvati raggiungibili e ne
+   * restituisce il grafo unificato pronto per il disegno.
+   */
+  async getLinkedGraph(treeId, { maxHops = 3 } = {}) {
+    const [homePeople, homeUnions, allLinks, trees] = await Promise.all([
+      this.getPeople(treeId),
+      this.getUnions(treeId),
+      this.getTreeLinks(treeId, { status: 'approved' }),
+      this.getTrees()
+    ]);
+
+    const treeNameById = new Map(trees.map(tree => [tree.id, tree.name]));
+    const homeTree = {
+      id: treeId,
+      name: treeNameById.get(treeId) || '',
+      people: homePeople,
+      unions: homeUnions
+    };
+
+    // Gli innesti del primo livello bastano a scoprire gli alberi vicini; per i salti
+    // successivi occorre interrogare anche i loro collegamenti.
+    let knownLinks = [...allLinks];
+    let linkedTreeIds = collectLinkedTreeIds(treeId, knownLinks, 1);
+    const loadedTrees = [homeTree];
+    const visited = new Set([treeId]);
+
+    for (let hop = 0; hop < maxHops && linkedTreeIds.length > 0; hop++) {
+      const toLoad = linkedTreeIds.filter(id => !visited.has(id));
+      if (toLoad.length === 0) break;
+
+      const loaded = await Promise.all(toLoad.map(async (id) => {
+        visited.add(id);
+        try {
+          const [people, unions, links] = await Promise.all([
+            this.getPeople(id),
+            this.getUnions(id),
+            this.getTreeLinks(id, { status: 'approved' })
+          ]);
+          return { tree: { id, name: treeNameById.get(id) || 'Albero collegato', people, unions }, links };
+        } catch (err) {
+          // Un albero può essere diventato invisibile: si ignora senza rompere la vista.
+          console.warn(`Albero collegato ${id} non caricabile:`, err.message);
+          return null;
+        }
+      }));
+
+      loaded.filter(Boolean).forEach(entry => {
+        loadedTrees.push(entry.tree);
+        knownLinks.push(...entry.links);
+      });
+
+      // Deduplica i collegamenti raccolti prima di cercare il salto successivo.
+      const byId = new Map(knownLinks.map(link => [link.id, link]));
+      knownLinks = Array.from(byId.values());
+      linkedTreeIds = collectLinkedTreeIds(treeId, knownLinks, hop + 2).filter(id => !visited.has(id));
+    }
+
+    const merged = mergeLinkedTrees({ homeTreeId: treeId, trees: loadedTrees, links: knownLinks });
+
+    return {
+      ...merged,
+      links: knownLinks,
+      trees: loadedTrees.map(tree => ({ id: tree.id, name: tree.name, peopleCount: tree.people.length }))
+    };
+  },
+
+  /**
+   * Copia dentro l'albero principale le persone e le unioni di un ramo agganciato.
+   * Le persone già condivise tramite innesto NON vengono duplicate: si riusa il nodo
+   * esistente. L'albero di origine resta intatto e di proprietà del suo autore.
+   */
+  async importLinkedBranch(linkId) {
+    const allLinks = isSupabaseConfigured
+      ? (await supabase.from('tree_links').select('*').eq('id', linkId)).data || []
+      : getLocalData('genealogy_tree_links').filter(l => l.id === linkId);
+
+    const target = allLinks[0];
+    if (!target) throw new Error('Innesto non trovato.');
+    if (target.status !== 'approved') throw new Error('L’innesto non è ancora stato approvato.');
+    if (!await this.canWriteTree(target.target_tree_id)) {
+      throw new Error('Non hai i permessi per importare in questo albero.');
+    }
+
+    const [branchPeople, branchUnions, existingLinks] = await Promise.all([
+      this.getPeople(target.source_tree_id),
+      this.getUnions(target.source_tree_id),
+      this.getTreeLinks(target.target_tree_id, { status: 'approved' })
+    ]);
+
+    // Mappa persona-del-ramo -> persona-già-presente-nell'albero-principale
+    const reuseByBranchPerson = new Map();
+    existingLinks.forEach(existing => {
+      if (existing.source_tree_id === target.source_tree_id && existing.target_tree_id === target.target_tree_id) {
+        reuseByBranchPerson.set(existing.source_person_id, existing.target_person_id);
+      }
+    });
+
+    const idMap = new Map();
+    const newPeople = [];
+
+    branchPeople.forEach(person => {
+      const reused = reuseByBranchPerson.get(person.id);
+      if (reused) {
+        idMap.set(person.id, reused);
+        return;
+      }
+      const newId = generateUUID();
+      idMap.set(person.id, newId);
+      newPeople.push({
+        id: newId,
+        tree_id: target.target_tree_id,
+        first_name: person.first_name,
+        last_name: person.last_name || '',
+        gender: person.gender || 'M',
+        birth_date: person.birth_date || '',
+        death_date: person.death_date || '',
+        birth_place: person.birth_place || '',
+        illnesses: person.illnesses || [],
+        notes: person.notes || '',
+        avatar_url: person.avatar_url || ''
+      });
+    });
+
+    const resolve = (id) => (id ? idMap.get(id) || null : null);
+    const newUnions = branchUnions.map(union => ({
+      id: generateUUID(),
+      tree_id: target.target_tree_id,
+      partner1_id: resolve(union.partner1_id),
+      partner2_id: resolve(union.partner2_id),
+      children_ids: (union.children_ids || []).map(resolve).filter(Boolean),
+      type: union.type || 'relationship'
+    })).filter(union => union.partner1_id || union.partner2_id);
+
+    // `overwrite: false` è essenziale: si aggiunge al contenuto esistente.
+    await this.importTreeData(target.target_tree_id, newPeople, newUnions, false);
+
+    return { importedPeople: newPeople.length, importedUnions: newUnions.length, reused: reuseByBranchPerson.size };
+  },
+
   async importTreeData(treeId, people, unions, overwrite = true) {
     const canWrite = await this.canWriteTree(treeId);
     if (!canWrite) throw new Error('Non hai i permessi per modificare questo albero.');

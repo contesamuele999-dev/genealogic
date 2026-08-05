@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Network, Plus, ShieldAlert, LogIn, LogOut, Settings, Upload, AlertCircle, Cake, Share2, Check, Dna, Eye, EyeOff } from 'lucide-react';
+import { Network, Plus, ShieldAlert, LogIn, LogOut, Settings, Upload, AlertCircle, Cake, Share2, Check, Dna, Eye, EyeOff, GitMerge, Link2 } from 'lucide-react';
 import { storage } from './services/storage';
 import { generateUUID } from './services/xmindParser';
 import { getUpcomingBirthdays } from './services/birthdayService';
@@ -16,6 +16,7 @@ import TreeSettingsModal from './components/TreeSettingsModal';
 import BirthdayModal from './components/BirthdayModal';
 import ChangeRequestsModal from './components/ChangeRequestsModal';
 import GeneticRiskModal from './components/GeneticRiskModal';
+import TreeLinksModal from './components/TreeLinksModal';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
@@ -26,6 +27,8 @@ export default function App() {
   const [canEdit, setCanEdit] = useState(false);
   const [canPropose, setCanPropose] = useState(false);
   const [canManageTree, setCanManageTree] = useState(false);
+  // Permesso dedicato ai dati clinici, configurato nelle Impostazioni Albero.
+  const [canViewHealth, setCanViewHealth] = useState(false);
   const treeLoadRequestRef = useRef(0);
 
   // Stati di evidenziazione e modali
@@ -47,6 +50,14 @@ export default function App() {
   // hanno una visibilità distinta dall'albero ufficiale. Sono accessibili solo a chi
   // gestisce l'albero e vanno sbloccate esplicitamente ad ogni sessione.
   const [clinicalMode, setClinicalMode] = useState(false);
+
+  // Innesti: alberi di altri utenti agganciati a questo (o viceversa).
+  const [showTreeLinks, setShowTreeLinks] = useState(false);
+  const [showLinkedBranches, setShowLinkedBranches] = useState(false);
+  const [linkedGraph, setLinkedGraph] = useState(null);
+  const [isLoadingLinkedGraph, setIsLoadingLinkedGraph] = useState(false);
+  const [treeLinks, setTreeLinks] = useState([]);
+  const [linksRefreshToken, setLinksRefreshToken] = useState(0);
 
   // Carica i dati utente
   const loadUser = useCallback(async () => {
@@ -89,6 +100,7 @@ export default function App() {
       setCanEdit(false);
       setCanPropose(false);
       setCanManageTree(false);
+      setCanViewHealth(false);
       return;
     }
 
@@ -96,12 +108,13 @@ export default function App() {
     const sessionUserId = currentUser?.id || null;
 
     try {
-      const [pList, uList, writePermission, proposePermission, managePermission] = await Promise.all([
+      const [pList, uList, writePermission, proposePermission, managePermission, healthPermission] = await Promise.all([
         storage.getPeople(activeTreeId),
         storage.getUnions(activeTreeId),
         storage.canWriteTree(activeTreeId),
         storage.canProposeTree(activeTreeId),
-        storage.canManageTree(activeTreeId)
+        storage.canManageTree(activeTreeId),
+        storage.canViewHealthTree(activeTreeId)
       ]);
       if (requestId !== treeLoadRequestRef.current || sessionUserId !== (currentUser?.id || null)) return;
       setPeople(pList);
@@ -109,6 +122,7 @@ export default function App() {
       setCanEdit(writePermission);
       setCanPropose(proposePermission);
       setCanManageTree(managePermission);
+      setCanViewHealth(healthPermission);
     } catch (err) {
       console.error(err);
     }
@@ -141,14 +155,69 @@ export default function App() {
   }, [activeTreeId, currentUser]);
 
   useEffect(() => {
-    if (!canManageTree) {
+    if (!canViewHealth) {
       setClinicalMode(false);
       setShowGeneticRisk(false);
     }
-  }, [canManageTree]);
+  }, [canViewHealth]);
 
-  // Unico interruttore da cui dipende la visibilità di TUTTE le informazioni sanitarie.
-  const healthVisible = canManageTree && clinicalMode;
+  // Unico interruttore da cui dipende la visibilità di TUTTE le informazioni sanitarie:
+  // il permesso dell'albero (health_permission) più l'attivazione esplicita dell'utente.
+  const healthVisible = canViewHealth && clinicalMode;
+
+  // Elenco degli innesti dell'albero corrente (per badge e gestione).
+  useEffect(() => {
+    let cancelled = false;
+    if (!activeTreeId) {
+      setTreeLinks([]);
+      return undefined;
+    }
+    storage.getTreeLinks(activeTreeId)
+      .then(list => { if (!cancelled) setTreeLinks(list); })
+      .catch(err => console.error(err));
+    return () => { cancelled = true; };
+  }, [activeTreeId, linksRefreshToken]);
+
+  // Vista unificata: carica i rami collegati solo quando l'utente la richiede.
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!activeTreeId || !showLinkedBranches) {
+      setLinkedGraph(null);
+      return undefined;
+    }
+
+    setIsLoadingLinkedGraph(true);
+    storage.getLinkedGraph(activeTreeId)
+      .then(graph => { if (!cancelled) setLinkedGraph(graph); })
+      .catch(err => {
+        console.error(err);
+        if (!cancelled) {
+          setLinkedGraph(null);
+          alert(`Impossibile caricare i rami collegati: ${err.message}`);
+        }
+      })
+      .finally(() => { if (!cancelled) setIsLoadingLinkedGraph(false); });
+
+    return () => { cancelled = true; };
+  }, [activeTreeId, showLinkedBranches, linksRefreshToken, people, unions]);
+
+  // Chiudi la vista unificata quando si cambia albero.
+  useEffect(() => {
+    setShowLinkedBranches(false);
+    setShowTreeLinks(false);
+  }, [activeTreeId]);
+
+  const approvedLinkCount = treeLinks.filter(link => link.status === 'approved').length;
+  const pendingLinkCount = treeLinks.filter(
+    link => link.status === 'pending' && link.target_tree_id === activeTreeId
+  ).length;
+
+  // Dati effettivamente disegnati: l'albero da solo, oppure la fusione con i rami.
+  const mergedActive = showLinkedBranches && linkedGraph;
+  const displayPeople = mergedActive ? linkedGraph.people : people;
+  const displayUnions = mergedActive ? linkedGraph.unions : unions;
+  const displayForeignIds = mergedActive ? linkedGraph.foreignPersonIds : undefined;
 
   const handleCreateTree = async () => {
     const name = window.prompt("Inserisci il nome del nuovo Albero Genealogico:");
@@ -172,8 +241,12 @@ export default function App() {
         updatedTree.name,
         updatedTree.description,
         updatedTree.visibility,
-        updatedTree.edit_permission
+        updatedTree.edit_permission,
+        updatedTree.health_permission,
+        updatedTree.link_permission
       );
+      // Il permesso clinico può essere cambiato proprio ora: rileggilo.
+      loadTreeDetails();
       loadTrees();
     } catch (err) {
       alert(err.message);
@@ -329,6 +402,7 @@ export default function App() {
     setCanEdit(false);
     setCanPropose(false);
     setCanManageTree(false);
+    setCanViewHealth(false);
     setActiveTreeId(treeId);
     replaceTreeInUrl(treeId);
   };
@@ -441,7 +515,38 @@ export default function App() {
             </button>
           )}
 
-          {activeTreeId && canManageTree && (
+          {activeTreeId && (approvedLinkCount > 0 || canEdit) && (
+            <button
+              className={`btn ${showLinkedBranches ? 'btn-linked-on' : 'btn-secondary'} flex-align gap-6`}
+              onClick={() => setShowLinkedBranches(value => !value)}
+              disabled={approvedLinkCount === 0 || isLoadingLinkedGraph}
+              title={approvedLinkCount === 0
+                ? 'Nessun ramo collegato a questo albero'
+                : 'Mostra o nascondi i rami degli altri utenti agganciati a questo albero'}
+            >
+              <GitMerge size={16} />
+              {isLoadingLinkedGraph ? 'Carico…' : 'Rami collegati'}
+              {approvedLinkCount > 0 && (
+                <span className="badge-count">{approvedLinkCount}</span>
+              )}
+            </button>
+          )}
+
+          {activeTreeId && (canEdit || canManageTree) && (
+            <button
+              className="btn btn-secondary relative flex-align gap-6"
+              onClick={() => setShowTreeLinks(true)}
+              title="Gestisci gli innesti fra alberi"
+            >
+              <Link2 size={16} />
+              Innesti
+              {pendingLinkCount > 0 && (
+                <span className="badge-count badge-count-alert">{pendingLinkCount}</span>
+              )}
+            </button>
+          )}
+
+          {activeTreeId && canViewHealth && (
             <button
               className={`btn ${clinicalMode ? 'btn-clinical-on' : 'btn-secondary'} flex-align gap-6`}
               onClick={() => setClinicalMode(value => !value)}
@@ -512,14 +617,15 @@ export default function App() {
       {activeTreeId ? (
         <GenealogyTree
           treeId={activeTreeId}
-          people={people}
-          unions={unions}
+          people={displayPeople}
+          unions={displayUnions}
           onSelectPerson={setSelectedPerson}
           onAddRelative={handleAddRelativeTrigger}
           canEdit={canEdit || canPropose}
           highlightedPersonId={highlightedPersonId}
           onDeletePeople={handleDeleteMultiplePeople}
           healthVisible={healthVisible}
+          foreignPersonIds={displayForeignIds}
         />
       ) : (
         <div className="welcome-screen">
@@ -557,7 +663,9 @@ export default function App() {
           onClose={() => setSelectedPerson(null)}
           onSave={handleSavePerson}
           onDelete={handleDeletePerson}
-          canEdit={canEdit || canPropose}
+          /* Un nodo che arriva da un albero collegato appartiene a un altro
+             proprietario: si consulta, non si modifica da qui. */
+          canEdit={(canEdit || canPropose) && !selectedPerson.is_foreign}
           healthVisible={healthVisible}
         />
       )}
@@ -635,6 +743,18 @@ export default function App() {
             const p = people.find(item => item.id === id);
             if (p) setSelectedPerson(p);
           }}
+        />
+      )}
+      {showTreeLinks && activeTreeId && (
+        <TreeLinksModal
+          isOpen={showTreeLinks}
+          onClose={() => setShowTreeLinks(false)}
+          treeId={activeTreeId}
+          treeName={activeTree?.name || ''}
+          people={people}
+          canManageTree={canManageTree}
+          canEditTree={canEdit}
+          onChanged={() => setLinksRefreshToken(value => value + 1)}
         />
       )}
       {showChangeRequests && activeTreeId && (

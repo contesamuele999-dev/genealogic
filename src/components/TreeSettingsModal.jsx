@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Save, Shield, Settings, Trash2 } from 'lucide-react';
+import { X, Save, Shield, Settings, Trash2, HeartPulse, GitMerge } from 'lucide-react';
 import { storage } from '../services/storage';
 
 export default function TreeSettingsModal({
@@ -12,6 +12,8 @@ export default function TreeSettingsModal({
   const [description, setDescription] = useState('');
   const [visibility, setVisibility] = useState('public');
   const [editPermission, setEditPermission] = useState('owner');
+  const [healthPermission, setHealthPermission] = useState('owner');
+  const [linkPermission, setLinkPermission] = useState('moderated');
   const [selectedEditors, setSelectedEditors] = useState([]);
   const [usersList, setUsersList] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -22,7 +24,10 @@ export default function TreeSettingsModal({
       setDescription(tree.description || '');
       setVisibility(tree.visibility || 'public');
       setEditPermission(tree.edit_permission || 'owner');
-      
+      setHealthPermission(tree.health_permission || 'owner');
+      setLinkPermission(tree.link_permission || 'moderated');
+
+
       const loadSettingsData = async () => {
         setIsLoading(true);
         try {
@@ -58,7 +63,9 @@ export default function TreeSettingsModal({
         name: name.trim(),
         description: description.trim(),
         visibility,
-        edit_permission: editPermission
+        edit_permission: editPermission,
+        health_permission: healthPermission,
+        link_permission: linkPermission
       });
 
       // 2. Se impostato su 'specific', salva gli editori associati
@@ -157,6 +164,52 @@ export default function TreeSettingsModal({
               <option value="auth_moderated">Utenti registrati e approvati (con approvazione delle modifiche)</option>
               <option value="public_moderated">Chiunque, anche senza account (con approvazione delle modifiche)</option>
             </select>
+          </div>
+
+          {/* Visibilità dei Dati Clinici (indipendente dall'albero ufficiale) */}
+          <div className="form-group">
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <HeartPulse size={14} style={{ color: 'var(--accent-violet)' }} />
+              Abilitazione Dati Clinici (Chi può vedere malattie e rischio ereditario)
+            </label>
+            <select
+              className="form-control"
+              value={healthPermission}
+              onChange={(e) => setHealthPermission(e.target.value)}
+            >
+              <option value="owner">Solo Io (Creatore/Proprietario)</option>
+              <option value="editors">Chi può modificare l'albero</option>
+              <option value="auth">Tutti gli utenti registrati ed approvati</option>
+              <option value="all">Chiunque possa vedere l'albero</option>
+            </select>
+            <span className="health-permission-hint">
+              Le informazioni sanitarie non seguono la visibilità dell'albero ufficiale.
+              Chi è autorizzato deve comunque attivare esplicitamente la “Modalità clinica”
+              per vederle, e l'attivazione decade a ogni cambio di albero o di sessione.
+            </span>
+          </div>
+
+          {/* Innesti da parte di altri utenti */}
+          <div className="form-group">
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <GitMerge size={14} className="logo-icon" />
+              Abilitazione Innesti (Chi può agganciare il proprio ramo a questo albero)
+            </label>
+            <select
+              className="form-control"
+              value={linkPermission}
+              onChange={(e) => setLinkPermission(e.target.value)}
+            >
+              <option value="moderated">Su richiesta, con la mia approvazione</option>
+              <option value="auth">Utenti registrati ed approvati, senza approvazione</option>
+              <option value="all">Chiunque possa vedere l'albero, senza approvazione</option>
+              <option value="none">Nessuno (albero chiuso)</option>
+            </select>
+            <span className="health-permission-hint" style={{ borderColor: 'rgba(0, 242, 254, 0.3)', background: 'rgba(0, 242, 254, 0.05)' }}>
+              Chi si innesta costruisce un albero suo e lo aggancia a una persona di questo,
+              per documentare il proprio ramo familiare. Non acquisisce alcun permesso di
+              modifica su questo albero: i rami collegati restano in sola lettura.
+            </span>
           </div>
 
           {/* Selezione Editori Specifici (Solo se editPermission === 'specific') */}

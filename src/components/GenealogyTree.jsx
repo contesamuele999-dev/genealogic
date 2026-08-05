@@ -9,6 +9,9 @@ const HORIZONTAL_GAP = 60;
 const VERTICAL_GAP = 120;
 const HORIZONTAL_GENERATION_GAP = 280;
 
+// Riferimento stabile: evita che un default `new Set()` rigeneri le dipendenze a ogni render.
+const EMPTY_ID_SET = new Set();
+
 const LAYOUT_OPTIONS = [
   { value: 'organigram', label: 'Organigramma' },
   { value: 'horizontal', label: 'Albero verso destra' },
@@ -53,7 +56,9 @@ export default function GenealogyTree({
   highlightedPersonId,
   onDeletePeople,
   // Le informazioni sanitarie hanno una visibilità separata dall'albero ufficiale.
-  healthVisible = false
+  healthVisible = false,
+  // Id delle persone che arrivano da alberi collegati: visibili ma in sola lettura.
+  foreignPersonIds = EMPTY_ID_SET
 }) {
   const [positions, setPositions] = useState({});
   const [draggedNode, setDraggedNode] = useState(null);
@@ -819,6 +824,14 @@ export default function GenealogyTree({
     // Non interferire con i pulsanti interni alla card (quick add, menu...)
     if (e.target.closest('button')) return;
 
+    // I nodi provenienti da alberi collegati non sono né spostabili né selezionabili:
+    // appartengono a un altro proprietario e restano in sola lettura.
+    const isForeignNode = foreignPersonIds.has(personId);
+    if (isForeignNode) {
+      hasDraggedRef.current = false;
+      return;
+    }
+
     if (e.shiftKey && canEdit) {
       e.stopPropagation();
       e.preventDefault();
@@ -1177,7 +1190,7 @@ export default function GenealogyTree({
                     }
                   }}
                   onAddRelative={(relation) => onAddRelative(person, relation)}
-                  canEdit={canEdit}
+                  canEdit={canEdit && !foreignPersonIds.has(person.id)}
                   healthVisible={healthVisible}
                 />
               </div>
