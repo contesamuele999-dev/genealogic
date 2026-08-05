@@ -1,33 +1,49 @@
 /**
  * birthdayService.js
- * Servizio per calcolare i compleanni dei parenti IN VITA e generare bozze di notifiche email per i membri della famiglia.
+ * Servizio per calcolare i compleanni dei familiari a partire dalla data di nascita
+ * registrata su ciascun nodo dell'albero, e generare bozze di notifiche email.
  */
+
+// Oltre questa età una persona senza data di decesso viene comunque considerata defunta:
+// serve a non proporre "compleanni" di antenati nati nell'800 solo perché manca il decesso.
+const MAX_PLAUSIBLE_AGE = 110;
+
+const MONTH_NAMES = [
+  'gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno',
+  'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'
+];
 
 /**
  * Estrae giorno e mese da una data di nascita in vari formati
- * (es: "22/05/1862", "1954-05-22", "22 maggio", "22/05")
+ * (es: "22/05/1862", "22-05-1862", "1954-05-22", "22 maggio", "22/05")
  */
-function parseBirthDayMonth(dateStr) {
+export function parseBirthDayMonth(dateStr) {
   if (!dateStr) return null;
 
-  const str = dateStr.trim();
+  const str = String(dateStr).trim();
 
-  // Formato GG/MM/AAAA o GG/MM
-  const slashMatch = str.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/);
-  if (slashMatch) {
-    const day = parseInt(slashMatch[1], 10);
-    const month = parseInt(slashMatch[2], 10) - 1; // 0-indexed per JavaScript Date
-    if (!isValidDayMonth(day, month)) return null;
-    return { day, month };
-  }
-
-  // Formato AAAA-MM-GG
-  const isoMatch = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  // Formato AAAA-MM-GG (ISO). Va verificato per primo: "1954-05-22" inizia con 4 cifre.
+  const isoMatch = str.match(/^(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})/);
   if (isoMatch) {
     const day = parseInt(isoMatch[3], 10);
     const month = parseInt(isoMatch[2], 10) - 1;
-    if (!isValidDayMonth(day, month)) return null;
-    return { day, month };
+    return isValidDayMonth(day, month) ? { day, month } : null;
+  }
+
+  // Formato GG/MM/AAAA o GG/MM (accetta anche separatori . e -)
+  const slashMatch = str.match(/^(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?/);
+  if (slashMatch) {
+    const day = parseInt(slashMatch[1], 10);
+    const month = parseInt(slashMatch[2], 10) - 1;
+    return isValidDayMonth(day, month) ? { day, month } : null;
+  }
+
+  // Formato testuale "22 maggio" / "22 maggio 1954"
+  const textMatch = str.toLowerCase().match(/^(\d{1,2})\s+([a-zà-ù]+)/);
+  if (textMatch) {
+    const day = parseInt(textMatch[1], 10);
+    const month = MONTH_NAMES.findIndex(name => name.startsWith(textMatch[2].slice(0, 3)));
+    return month >= 0 && isValidDayMonth(day, month) ? { day, month } : null;
   }
 
   return null;
@@ -43,32 +59,45 @@ function isValidDayMonth(day, month) {
 }
 
 /**
- * Calcola l'età attuale (o che compirà quest'anno)
+ * Estrae l'anno di nascita, se presente nella stringa.
  */
-function calculateTurningAge(dateStr) {
+function extractBirthYear(dateStr) {
   if (!dateStr) return null;
-  const match = dateStr.match(/(\d{4})/);
-  if (match) {
-    const birthYear = parseInt(match[1], 10);
-    const currentYear = new Date().getFullYear();
-    return currentYear - birthYear;
-  }
-  return null;
+  const match = String(dateStr).match(/\b(\d{4})\b/);
+  return match ? parseInt(match[1], 10) : null;
 }
 
 /**
- * Trova i compleanni imminenti dei parenti IN VITA entro un certo numero di giorni (default 60 giorni)
+ * Stabilisce se una persona è (verosimilmente) in vita.
+ * Una data di decesso valorizzata, oppure un'età implausibile, la escludono.
  */
-export function getUpcomingBirthdays(people = [], daysThreshold = 60, referenceDate = new Date()) {
+export function isProbablyAlive(person, referenceDate = new Date()) {
+  if (person?.death_date && String(person.death_date).trim().length > 0) return false;
+
+  const birthYear = extractBirthYear(person?.birth_date);
+  if (birthYear === null) return true;
+
+  return referenceDate.getFullYear() - birthYear <= MAX_PLAUSIBLE_AGE;
+}
+
+/**
+ * Trova i compleanni imminenti entro un certo numero di giorni (default 60).
+ * Scorre TUTTI i nodi che hanno una data di nascita utilizzabile; l'opzione
+ * `includeDeceased` permette di includere anche gli anniversari dei defunti.
+ */
+export function getUpcomingBirthdays(people = [], daysThreshold = 60, referenceDate = new Date(), options = {}) {
+  const { includeDeceased = false } = options;
+
   const today = new Date(referenceDate);
   today.setHours(0, 0, 0, 0);
 
   const upcoming = [];
 
   people.forEach(person => {
-    // Escludi parenti deceduti (hanno una data di decesso registrata)
-    if (person.death_date && person.death_date.trim().length > 0) return;
-    if (!person.birth_date) return;
+    if (!person || !person.birth_date) return;
+
+    const alive = isProbablyAlive(person, today);
+    if (!alive && !includeDeceased) return;
 
     const parsed = parseBirthDayMonth(person.birth_date);
     if (!parsed) return;
@@ -87,22 +116,46 @@ export function getUpcomingBirthdays(people = [], daysThreshold = 60, referenceD
     const daysRemaining = Math.round((birthdayUtc - todayUtc) / 86400000);
 
     if (daysRemaining <= daysThreshold) {
-      const currentAge = calculateTurningAge(person.birth_date);
-      const birthYearMatch = person.birth_date.match(/\d{4}/);
+      const birthYear = extractBirthYear(person.birth_date);
 
       upcoming.push({
         person,
+        alive,
         daysRemaining,
         nextBirthday,
-        turningAge: currentAge !== null && birthYearMatch
-          ? nextBirthday.getFullYear() - parseInt(birthYearMatch[0], 10)
-          : null
+        turningAge: birthYear !== null ? nextBirthday.getFullYear() - birthYear : null
       });
     }
   });
 
-  // Ordina dal compleanno più vicino al più lontano
-  return upcoming.sort((a, b) => a.daysRemaining - b.daysRemaining);
+  // Ordina dal compleanno più vicino al più lontano, poi per nome
+  return upcoming.sort((a, b) => {
+    if (a.daysRemaining !== b.daysRemaining) return a.daysRemaining - b.daysRemaining;
+    const nameA = `${a.person.first_name || ''} ${a.person.last_name || ''}`.trim();
+    const nameB = `${b.person.first_name || ''} ${b.person.last_name || ''}`.trim();
+    return nameA.localeCompare(nameB, 'it');
+  });
+}
+
+/**
+ * Riepilogo diagnostico: quante persone hanno una data di nascita utilizzabile.
+ * Serve nel pannello per spiegare all'utente perché certi nodi non compaiono.
+ */
+export function getBirthdayCoverage(people = [], referenceDate = new Date()) {
+  let withUsableDate = 0;
+  let yearOnly = 0;
+  let missing = 0;
+  let deceased = 0;
+
+  people.forEach(person => {
+    if (!person) return;
+    if (!isProbablyAlive(person, referenceDate)) deceased += 1;
+    if (!person.birth_date) { missing += 1; return; }
+    if (parseBirthDayMonth(person.birth_date)) withUsableDate += 1;
+    else yearOnly += 1;
+  });
+
+  return { total: people.length, withUsableDate, yearOnly, missing, deceased };
 }
 
 /**

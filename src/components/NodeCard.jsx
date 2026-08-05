@@ -6,7 +6,10 @@ export default function NodeCard({
   highlighted,
   onClick,
   onAddRelative,
-  canEdit
+  canEdit,
+  // Il badge "Salute" compare solo in modalità clinica: i dati sanitari non fanno
+  // parte dell'albero ufficiale.
+  healthVisible = false
 }) {
   const [showAddMenu, setShowAddMenu] = useState(false);
   const menuRef = useRef(null);
@@ -33,7 +36,7 @@ export default function NodeCard({
     }, 150);
   };
 
-  const hasIllnesses = Array.isArray(person.illnesses) && person.illnesses.length > 0;
+  const hasIllnesses = healthVisible && Array.isArray(person.illnesses) && person.illnesses.length > 0;
   const hasNotes = person.notes && person.notes.trim().length > 0;
 
   return (

@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { X, Save, Edit2, Trash2, HeartPulse, FileText, User, Plus } from 'lucide-react';
+import { X, Save, Edit2, Trash2, HeartPulse, FileText, User, Plus, ShieldAlert } from 'lucide-react';
 
 export default function PersonDetailsModal({
   person,
   onClose,
   onSave,
   onDelete,
-  canEdit
+  canEdit,
+  // I dati sanitari sono riservati: la scheda "Salute" appare solo in modalità clinica.
+  healthVisible = false
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [activeTab, setActiveTab] = useState('general');
@@ -42,6 +44,14 @@ export default function PersonDetailsModal({
       setActiveTab('general');
     }
   }, [person]);
+
+  // Se la modalità clinica viene disattivata mentre la scheda Salute è aperta,
+  // riporta l'utente sull'anagrafica.
+  useEffect(() => {
+    if (!healthVisible && activeTab === 'health') {
+      setActiveTab('general');
+    }
+  }, [healthVisible, activeTab]);
 
   const handleSave = async () => {
     if (!firstName.trim()) {
@@ -120,12 +130,15 @@ export default function PersonDetailsModal({
           >
             Anagrafica
           </button>
-          <button
-            className={`tab-btn ${activeTab === 'health' ? 'active' : ''}`}
-            onClick={() => setActiveTab('health')}
-          >
-            Salute {illnesses.length > 0 ? `(${illnesses.length})` : ''}
-          </button>
+          {healthVisible && (
+            <button
+              className={`tab-btn ${activeTab === 'health' ? 'active' : ''}`}
+              onClick={() => setActiveTab('health')}
+              title="Dati riservati, visibili solo in modalità clinica"
+            >
+              Salute {illnesses.length > 0 ? `(${illnesses.length})` : ''}
+            </button>
+          )}
           <button
             className={`tab-btn ${activeTab === 'notes' ? 'active' : ''}`}
             onClick={() => setActiveTab('notes')}
@@ -239,8 +252,15 @@ export default function PersonDetailsModal({
             </div>
           )}
 
-          {activeTab === 'health' && (
+          {activeTab === 'health' && healthVisible && (
             <div>
+              <div className="clinical-disclaimer" style={{ marginBottom: '16px' }}>
+                <ShieldAlert size={15} style={{ flexShrink: 0 }} />
+                <span>
+                  Informazioni sanitarie riservate: non compaiono nell’albero ufficiale e sono
+                  visibili solo con la modalità clinica attiva.
+                </span>
+              </div>
               {isEditing && (
                 <div className="glass" style={{ padding: '16px', borderRadius: '12px', marginBottom: '16px' }}>
                   <h4 style={{ marginBottom: '12px', fontSize: '0.9rem' }}>Nuova Malattia / Tendenza Ereditaria</h4>

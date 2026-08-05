@@ -1,24 +1,34 @@
-import React, { useState } from 'react';
-import { X, Cake, Mail, Calendar, Check, Send } from 'lucide-react';
-import { getUpcomingBirthdays, generateBirthdayEmailContent } from '../services/birthdayService';
+import React, { useMemo, useState } from 'react';
+import { X, Cake, Mail, Calendar, Check, Send, Info } from 'lucide-react';
+import {
+  getUpcomingBirthdays,
+  getBirthdayCoverage,
+  generateBirthdayEmailContent
+} from '../services/birthdayService';
 import { sendEmail } from '../services/emailService';
+
+const DAY_FILTERS = [7, 15, 30, 60, 365];
 
 export default function BirthdayModal({ isOpen, onClose, people = [], treeName = '', onSelectPerson }) {
   const [selectedDays, setSelectedDays] = useState(60);
+  const [includeDeceased, setIncludeDeceased] = useState(false);
   const [copiedId, setCopiedId] = useState(null);
   const [recipients, setRecipients] = useState('');
   const [sendingId, setSendingId] = useState(null);
 
-  if (!isOpen) return null;
+  const upcomingBirthdays = useMemo(
+    () => getUpcomingBirthdays(people, selectedDays, new Date(), { includeDeceased }),
+    [people, selectedDays, includeDeceased]
+  );
+  const coverage = useMemo(() => getBirthdayCoverage(people), [people]);
 
-  const upcomingBirthdays = getUpcomingBirthdays(people, selectedDays);
+  if (!isOpen) return null;
 
   const handleCopyEmail = (item) => {
     const { subject, body } = generateBirthdayEmailContent(item, treeName);
-    const fullText = `Oggetto: ${subject}\n\n${body}`;
-    navigator.clipboard.writeText(fullText);
+    navigator.clipboard.writeText(`Oggetto: ${subject}\n\n${body}`);
     setCopiedId(item.person.id);
-    setTimeout(() => setCopiedId(null), 3500);
+    setTimeout(() => setCopiedId(null), 3000);
   };
 
   const handleSendEmail = async (item) => {
@@ -39,121 +49,122 @@ export default function BirthdayModal({ isOpen, onClose, people = [], treeName =
   };
 
   return (
-    <div className="modal-backdrop glass-backdrop flex-center">
-      <div className="modal-content glass-card modal-lg animate-scale-in">
-        <div className="modal-header border-b">
-          <div className="flex-align gap-12">
-            <div className="avatar-circle avatar-amber">
-              <Cake size={24} className="text-amber" />
-            </div>
-            <div>
-              <h2 className="text-xl font-bold">Compleanni Parenti in Vita</h2>
-              <p className="text-sm text-muted">
-                Avvisa i membri della famiglia dei compleanni imminenti
-              </p>
-            </div>
-          </div>
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-container glass large birthday-modal" onClick={(e) => e.stopPropagation()}>
+
+        <div className="modal-header">
+          <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Cake size={20} style={{ color: 'var(--accent-amber)' }} />
+            Compleanni in famiglia
+          </h3>
           <button className="btn-icon" onClick={onClose}>
-            <X size={20} />
+            <X size={18} />
           </button>
         </div>
 
-        {/* Filtro Orizzonte Temporale */}
-        <div className="p-16 border-b flex-between flex-wrap gap-12 bg-app-subtle">
-          <span className="text-sm font-medium flex-align gap-6">
-            <Calendar size={16} /> Mostra compleanni nei prossimi:
-          </span>
-          <div className="flex-align gap-8">
-            {[7, 15, 30, 60].map(days => (
-              <button
-                key={days}
-                className={`btn btn-sm ${selectedDays === days ? 'btn-primary' : 'btn-secondary'}`}
-                onClick={() => setSelectedDays(days)}
-              >
-                {days} giorni
-              </button>
-            ))}
+        <div className="birthday-toolbar">
+          <div className="birthday-filter-row">
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', margin: 0 }}>
+              <Calendar size={15} /> Prossimi
+            </label>
+            <div className="birthday-chips">
+              {DAY_FILTERS.map(days => (
+                <button
+                  key={days}
+                  className={`birthday-chip ${selectedDays === days ? 'active' : ''}`}
+                  onClick={() => setSelectedDays(days)}
+                >
+                  {days === 365 ? '1 anno' : `${days} gg`}
+                </button>
+              ))}
+            </div>
           </div>
+
+          <label className="hud-checkbox-option" title="Mostra anche gli anniversari di nascita dei familiari defunti">
+            <input
+              type="checkbox"
+              checked={includeDeceased}
+              onChange={(e) => setIncludeDeceased(e.target.checked)}
+            />
+            <span>Includi defunti</span>
+          </label>
         </div>
 
-        <div className="p-16 border-b bg-app-subtle">
-          <label className="text-sm font-medium">Destinatari email</label>
-          <input
-            type="text"
-            className="form-control"
-            value={recipients}
-            onChange={(event) => setRecipients(event.target.value)}
-            placeholder="mario@esempio.it, lucia@esempio.it"
-          />
-          <span className="text-xs text-muted">Separa più indirizzi con una virgola.</span>
-        </div>
+        <div className="modal-body">
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>Destinatari email</label>
+            <input
+              type="text"
+              className="form-control"
+              value={recipients}
+              onChange={(event) => setRecipients(event.target.value)}
+              placeholder="mario@esempio.it, lucia@esempio.it"
+            />
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+              Separa più indirizzi con una virgola.
+            </span>
+          </div>
 
-        {/* Lista Compleanni */}
-        <div className="modal-body p-20 max-h-400 overflow-y-auto">
           {upcomingBirthdays.length === 0 ? (
-            <div className="empty-state text-center p-32">
-              <Cake size={48} className="text-muted mb-12 opacity-50" />
-              <p className="text-lg font-semibold">Nessun compleanno nei prossimi {selectedDays} giorni</p>
-              <p className="text-sm text-muted">Non ci sono parenti in vita che compiono gli anni in questo intervallo.</p>
+            <div className="birthday-empty">
+              <Cake size={44} style={{ color: 'var(--text-muted)', opacity: 0.4 }} />
+              <p style={{ fontWeight: 600 }}>
+                Nessun compleanno nei prossimi {selectedDays === 365 ? '12 mesi' : `${selectedDays} giorni`}
+              </p>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                Prova ad allargare l’intervallo o a completare le date di nascita nelle schede.
+              </p>
             </div>
           ) : (
-            <div className="flex-col gap-12">
+            <div className="birthday-list">
               {upcomingBirthdays.map((item) => {
-                const { person, daysRemaining, nextBirthday, turningAge } = item;
+                const { person, daysRemaining, nextBirthday, turningAge, alive } = item;
                 const isToday = daysRemaining === 0;
-                const isTomorrow = daysRemaining === 1;
 
                 return (
-                  <div
-                    key={person.id}
-                    className={`p-16 rounded-12 border flex-between flex-wrap gap-12 transition-all ${
-                      isToday
-                        ? 'border-amber bg-amber-subtle glow-amber'
-                        : 'bg-card-hover'
-                    }`}
-                  >
-                    <div className="flex-align gap-12">
-                      <div
-                        className={`badge-days ${
-                          isToday ? 'bg-amber text-inverse font-bold' : 'bg-secondary'
-                        }`}
-                      >
-                        {isToday ? '🎉 OGGI!' : isTomorrow ? 'Domani' : `${daysRemaining} gg`}
-                      </div>
-                      <div>
-                        <button
-                          className="text-base font-bold link-hover text-left"
-                          onClick={() => {
-                            if (onSelectPerson) onSelectPerson(person.id);
-                            onClose();
-                          }}
-                        >
-                          {person.first_name} {person.last_name}
-                        </button>
-                        <p className="text-xs text-muted">
-                          {nextBirthday.toLocaleDateString('it-IT', { day: 'numeric', month: 'long' })}
-                          {turningAge && ` • Compie ${turningAge} anni`}
-                        </p>
-                      </div>
+                  <div key={person.id} className={`birthday-item ${isToday ? 'today' : ''}`}>
+                    <div className={`birthday-badge ${isToday ? 'today' : ''}`}>
+                      {isToday ? 'OGGI' : daysRemaining === 1 ? 'Domani' : `${daysRemaining} gg`}
                     </div>
 
-                    <div className="flex-align gap-8">
+                    <div className={`node-avatar avatar-${person.gender || 'M'}`}>
+                      {(person.first_name || '?')[0]}{(person.last_name || '')[0] || ''}
+                    </div>
+
+                    <div className="birthday-info">
                       <button
-                        className="btn btn-sm btn-secondary flex-align gap-6"
-                        onClick={() => handleCopyEmail(item)}
-                        title="Copia bozza email per i membri"
+                        className="birthday-name"
+                        onClick={() => {
+                          if (onSelectPerson) onSelectPerson(person.id);
+                          onClose();
+                        }}
                       >
-                        {copiedId === person.id ? <Check size={14} className="text-emerald" /> : <Mail size={14} />}
-                        {copiedId === person.id ? 'Copiato!' : 'Copia Bozza'}
+                        {person.first_name} {person.last_name}
+                      </button>
+                      <span className="birthday-meta">
+                        {nextBirthday.toLocaleDateString('it-IT', { day: 'numeric', month: 'long' })}
+                        {turningAge !== null && (alive ? ` • compie ${turningAge} anni` : ` • ${turningAge}° anniversario`)}
+                        {!alive && ' • defunto'}
+                      </span>
+                    </div>
+
+                    <div className="birthday-actions">
+                      <button
+                        className="btn btn-secondary"
+                        onClick={() => handleCopyEmail(item)}
+                        title="Copia la bozza email"
+                      >
+                        {copiedId === person.id ? <Check size={14} /> : <Mail size={14} />}
+                        {copiedId === person.id ? 'Copiato' : 'Bozza'}
                       </button>
                       <button
-                        className="btn btn-sm btn-primary flex-align gap-6"
+                        className="btn btn-primary"
                         onClick={() => handleSendEmail(item)}
                         title="Invia tramite Maileroo"
                         disabled={sendingId === person.id}
                       >
                         <Send size={14} />
-                        {sendingId === person.id ? 'Invio…' : 'Invia Email'}
+                        {sendingId === person.id ? 'Invio…' : 'Invia'}
                       </button>
                     </div>
                   </div>
@@ -161,12 +172,20 @@ export default function BirthdayModal({ isOpen, onClose, people = [], treeName =
               })}
             </div>
           )}
+
+          <div className="xmind-help-box" style={{ display: 'flex', gap: '8px' }}>
+            <Info size={14} style={{ flexShrink: 0, marginTop: '2px' }} />
+            <span>
+              Calcolo eseguito sulla data di nascita di tutti i {coverage.total} nodi dell’albero:{' '}
+              <strong>{coverage.withUsableDate}</strong> con giorno e mese utilizzabili,{' '}
+              {coverage.yearOnly} con il solo anno e {coverage.missing} senza data.
+              I familiari con data di decesso sono esclusi salvo l’opzione “Includi defunti”.
+            </span>
+          </div>
         </div>
 
-        <div className="modal-footer border-t p-16 flex-end">
-          <button className="btn btn-secondary" onClick={onClose}>
-            Chiudi
-          </button>
+        <div className="modal-footer">
+          <button className="btn btn-secondary" onClick={onClose}>Chiudi</button>
         </div>
       </div>
     </div>

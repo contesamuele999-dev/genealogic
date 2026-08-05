@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Network, Plus, ShieldAlert, LogIn, LogOut, Settings, Upload, AlertCircle, Cake, Share2, Check } from 'lucide-react';
+import { Network, Plus, ShieldAlert, LogIn, LogOut, Settings, Upload, AlertCircle, Cake, Share2, Check, Dna, Eye, EyeOff } from 'lucide-react';
 import { storage } from './services/storage';
 import { generateUUID } from './services/xmindParser';
 import { getUpcomingBirthdays } from './services/birthdayService';
@@ -15,6 +15,7 @@ import AdminPanel from './components/AdminPanel';
 import TreeSettingsModal from './components/TreeSettingsModal';
 import BirthdayModal from './components/BirthdayModal';
 import ChangeRequestsModal from './components/ChangeRequestsModal';
+import GeneticRiskModal from './components/GeneticRiskModal';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
@@ -39,7 +40,13 @@ export default function App() {
   const [showImportExport, setShowImportExport] = useState(false);
   const [showBirthdays, setShowBirthdays] = useState(false);
   const [showChangeRequests, setShowChangeRequests] = useState(false);
+  const [showGeneticRisk, setShowGeneticRisk] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
+
+  // "Modalità clinica": le informazioni sanitarie e il calcolo del rischio ereditario
+  // hanno una visibilità distinta dall'albero ufficiale. Sono accessibili solo a chi
+  // gestisce l'albero e vanno sbloccate esplicitamente ad ogni sessione.
+  const [clinicalMode, setClinicalMode] = useState(false);
 
   // Carica i dati utente
   const loadUser = useCallback(async () => {
@@ -125,6 +132,23 @@ export default function App() {
     loadTreeDetails();
     setHighlightedPersonId(null);
   }, [activeTreeId, loadTreeDetails]);
+
+  // La modalità clinica non è mai "appiccicosa": si azzera cambiando albero o utente
+  // e decade appena l'utente perde i permessi di gestione.
+  useEffect(() => {
+    setClinicalMode(false);
+    setShowGeneticRisk(false);
+  }, [activeTreeId, currentUser]);
+
+  useEffect(() => {
+    if (!canManageTree) {
+      setClinicalMode(false);
+      setShowGeneticRisk(false);
+    }
+  }, [canManageTree]);
+
+  // Unico interruttore da cui dipende la visibilità di TUTTE le informazioni sanitarie.
+  const healthVisible = canManageTree && clinicalMode;
 
   const handleCreateTree = async () => {
     const name = window.prompt("Inserisci il nome del nuovo Albero Genealogico:");
@@ -417,6 +441,30 @@ export default function App() {
             </button>
           )}
 
+          {activeTreeId && canManageTree && (
+            <button
+              className={`btn ${clinicalMode ? 'btn-clinical-on' : 'btn-secondary'} flex-align gap-6`}
+              onClick={() => setClinicalMode(value => !value)}
+              title={clinicalMode
+                ? 'Nascondi le informazioni sanitarie (visibilità riservata)'
+                : 'Mostra le informazioni sanitarie: dati riservati, non visibili nell’albero ufficiale'}
+            >
+              {clinicalMode ? <Eye size={16} /> : <EyeOff size={16} />}
+              Modalità clinica
+            </button>
+          )}
+
+          {activeTreeId && healthVisible && (
+            <button
+              className="btn btn-secondary flex-align gap-6"
+              onClick={() => setShowGeneticRisk(true)}
+              title="Stima del rischio ereditario per la prole"
+            >
+              <Dna size={16} style={{ color: 'var(--accent-violet)' }} />
+              Rischio ereditario
+            </button>
+          )}
+
           {activeTreeId && (canEdit || canPropose) && (
             <>
               <button className="btn btn-primary" onClick={() => handleAddRelativeTrigger(null, 'free')} title="Aggiungi Capostipite">
@@ -471,6 +519,7 @@ export default function App() {
           canEdit={canEdit || canPropose}
           highlightedPersonId={highlightedPersonId}
           onDeletePeople={handleDeleteMultiplePeople}
+          healthVisible={healthVisible}
         />
       ) : (
         <div className="welcome-screen">
@@ -509,6 +558,7 @@ export default function App() {
           onSave={handleSavePerson}
           onDelete={handleDeletePerson}
           canEdit={canEdit || canPropose}
+          healthVisible={healthVisible}
         />
       )}
 
@@ -526,6 +576,7 @@ export default function App() {
           onClose={() => setRelativeToAdd(null)}
           onSave={handleSaveNewRelative}
           canEdit={true}
+          healthVisible={healthVisible}
         />
       )}
 
@@ -566,6 +617,19 @@ export default function App() {
           onClose={() => setShowBirthdays(false)}
           people={people}
           treeName={activeTree?.name || 'Albero Genealogico'}
+          onSelectPerson={(id) => {
+            setHighlightedPersonId(id);
+            const p = people.find(item => item.id === id);
+            if (p) setSelectedPerson(p);
+          }}
+        />
+      )}
+      {showGeneticRisk && healthVisible && (
+        <GeneticRiskModal
+          isOpen={showGeneticRisk}
+          onClose={() => setShowGeneticRisk(false)}
+          people={people}
+          unions={unions}
           onSelectPerson={(id) => {
             setHighlightedPersonId(id);
             const p = people.find(item => item.id === id);

@@ -23,7 +23,11 @@ function parseName(nameStr) {
   const cleanName = nameStr
     .replace(/\(.*?\)/g, '')
     .replace(/\[.*?\]/g, '')
+    // rimuove le date scritte fuori parentesi ("Mario Rossi 1862-1909" -> "Mario Rossi")
+    .replace(/(?:\bn(?:at[oa])?\.?|\bm(?:ort[oa])?\.?|\bdeced(?:uto|uta)\.?|[*°†✝])\s*(?=\d)/gi, ' ')
+    .replace(/\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}|\d{4}[/.-]\d{1,2}[/.-]\d{1,2}|\d{3,4}/g, ' ')
     // rimuove separatori/punteggiatura pendenti a inizio o fine ("Mario Rossi -" -> "Mario Rossi")
+    .replace(/\s{2,}/g, ' ')
     .replace(/^[\s\-–—+&=|,.:;]+/, '')
     .replace(/[\s\-–—+&=|,.:;]+$/, '')
     .trim();
@@ -67,6 +71,81 @@ function detectGenderFromName(firstName) {
   return 'M';
 }
 
+// Un "token data": 22/05/1862, 22-05-1862, 22.05.1862, 1862-05-22, oppure il solo anno 1862.
+const DATE_TOKEN = String.raw`\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}|\d{4}[/.-]\d{1,2}[/.-]\d{1,2}|\d{3,4}`;
+// Separatori di intervallo nascita-morte: trattino, en dash, em dash, tilde, "a", "al".
+const RANGE_SEP = String.raw`\s*(?:[-–—~]+|\bal?\b)\s*`;
+
+const RANGE_RE = new RegExp(`(${DATE_TOKEN})${RANGE_SEP}(${DATE_TOKEN})`);
+// Marcatori espliciti di nascita: n., nato, nata, b., *, °
+const BIRTH_MARK_RE = new RegExp(String.raw`(?:\bnat[oa]\b\.?\s*|\bnascita\b:?\s*|\bn\.\s*|\bb\.\s*|[*°])\s*(${DATE_TOKEN})`, 'i');
+// Marcatori espliciti di morte: m., morto, morta, deceduto, d., †, +
+const DEATH_MARK_RE = new RegExp(
+  String.raw`(?:\bmort[oa]\b\.?\s*|\bdeces(?:so|sa)\b:?\s*|\bdeced(?:uto|uta)\b\.?\s*|\bm\.\s*|\bd\.\s*|[†✝])\s*(${DATE_TOKEN})`,
+  'i'
+);
+
+/**
+ * Normalizza un token data in una forma leggibile e coerente (GG/MM/AAAA o AAAA).
+ */
+function normalizeDateToken(token) {
+  if (!token) return '';
+  const raw = token.trim();
+
+  // AAAA-MM-GG -> GG/MM/AAAA
+  const iso = raw.match(/^(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})$/);
+  if (iso) {
+    return `${iso[3].padStart(2, '0')}/${iso[2].padStart(2, '0')}/${iso[1]}`;
+  }
+
+  // GG/MM/AAAA (o con . e -) -> GG/MM/AAAA
+  const dmy = raw.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$/);
+  if (dmy) {
+    let year = dmy[3];
+    if (year.length === 2) year = (Number(year) > 30 ? '19' : '20') + year;
+    return `${dmy[1].padStart(2, '0')}/${dmy[2].padStart(2, '0')}/${year}`;
+  }
+
+  return raw;
+}
+
+/**
+ * Estrae date di nascita e morte da un frammento di testo.
+ * Gestisce intervalli ("1862 - 1909", em dash inclusi), marcatori espliciti
+ * ("n. 1862", "†1909", "*1862") e la singola data isolata.
+ * Ritorna { birthDate, deathDate } con stringhe eventualmente vuote.
+ */
+function extractDates(text) {
+  const result = { birthDate: '', deathDate: '' };
+  if (!text) return result;
+
+  // 1. Marcatori espliciti: hanno sempre la precedenza perché non ambigui.
+  const birthMark = text.match(BIRTH_MARK_RE);
+  const deathMark = text.match(DEATH_MARK_RE);
+  if (birthMark) result.birthDate = normalizeDateToken(birthMark[1]);
+  if (deathMark) result.deathDate = normalizeDateToken(deathMark[1]);
+  if (result.birthDate && result.deathDate) return result;
+
+  // 2. Intervallo nascita-morte.
+  const range = text.match(RANGE_RE);
+  if (range) {
+    if (!result.birthDate) result.birthDate = normalizeDateToken(range[1]);
+    if (!result.deathDate) result.deathDate = normalizeDateToken(range[2]);
+    return result;
+  }
+
+  // 3. Date isolate: la prima è la nascita, un'eventuale seconda è la morte.
+  if (!result.birthDate || !result.deathDate) {
+    const singles = text.match(new RegExp(DATE_TOKEN, 'g')) || [];
+    const used = new Set([result.birthDate, result.deathDate].filter(Boolean));
+    const free = singles.map(normalizeDateToken).filter(d => !used.has(d));
+    if (!result.birthDate && free.length > 0) result.birthDate = free.shift();
+    if (!result.deathDate && free.length > 0) result.deathDate = free.shift();
+  }
+
+  return result;
+}
+
 /**
  * Estrae metadati da una stringa con nome e informazioni tra parentesi
  * Es: "Mario Rossi (22/05/1862 - 11/02/1909)"
@@ -95,35 +174,23 @@ function parseMetadata(str) {
     else meta.gender = 'F';
   }
 
-  // Estrai informazioni tra parentesi tonde ()
+  // Estrai le date dal contenuto tra parentesi tonde (), unendo i vari gruppi:
+  // "Mario Rossi (1862) (1909)" deve dare nascita 1862 e morte 1909.
   const parentMatches = str.match(/\((.*?)\)/g);
   if (parentMatches) {
-    for (const match of parentMatches) {
-      const content = match.slice(1, -1).trim();
+    const joined = parentMatches.map(m => m.slice(1, -1).trim()).join(' ');
+    const dates = extractDates(joined);
+    if (dates.birthDate) meta.birthDate = dates.birthDate;
+    if (dates.deathDate) meta.deathDate = dates.deathDate;
+  }
 
-      // Rileva date (formati: 22/05/1862, 1862, 22/05/1862 - 11/02/1909, 5-6/11/1928)
-      // Data di nascita (prima parte della range o singola)
-      const datePattern = /(\d{1,2}\/\d{1,2}\/\d{4}|\d{4})\s*(?:-|–)\s*(\d{1,2}\/\d{1,2}\/\d{4}|\d{4})?/i;
-      const dateMatch = content.match(datePattern);
-
-      if (dateMatch) {
-        meta.birthDate = dateMatch[1];
-        if (dateMatch[2]) {
-          meta.deathDate = dateMatch[2];
-        }
-      } else if (/^\d{4}$/.test(content) && !dateMatch) {
-        // Solo anno
-        meta.birthDate = content;
-      }
-
-      // Se non c'è una data valida ma c'è un anno, potrebbe essere solo birth
-      if (!meta.birthDate && /(\d{4})/.test(content)) {
-        const yearMatch = content.match(/(\d{4})/);
-        if (yearMatch) {
-          meta.birthDate = yearMatch[1];
-        }
-      }
-    }
+  // Se le parentesi non contenevano date, cercale anche nel testo "nudo"
+  // (es. "Mario Rossi 1862-1909" oppure "Mario Rossi n.1862 †1909").
+  if (!meta.birthDate || !meta.deathDate) {
+    const bare = str.replace(/\[.*?\]/g, ' ').replace(/\((.*?)\)/g, ' ');
+    const dates = extractDates(bare);
+    if (!meta.birthDate && dates.birthDate) meta.birthDate = dates.birthDate;
+    if (!meta.deathDate && dates.deathDate) meta.deathDate = dates.deathDate;
   }
 
   // Rileva informazioni tra parentesi quadre []
@@ -140,9 +207,9 @@ function parseMetadata(str) {
           const val = keyValue.slice(1).join(':').trim();
 
           if (key.includes('nat') || key.includes('nascita') || key.includes('birth') || key === 'n') {
-            meta.birthDate = val;
-          } else if (key.includes('mort') || key.includes('decesso') || key.includes('death') || key === 'm') {
-            meta.deathDate = val;
+            meta.birthDate = normalizeDateToken(val);
+          } else if (key.includes('mort') || key.includes('decesso') || key.includes('deces') || key.includes('death') || key === 'm') {
+            meta.deathDate = normalizeDateToken(val);
           } else if (key.includes('luogo') || key.includes('place') || key.includes('città') || key.includes('citta')) {
             meta.birthPlace = val;
           } else if (key.includes('malatt') || key.includes('patolog') || key.includes('ill') || key.includes('salute')) {
@@ -164,13 +231,9 @@ function parseMetadata(str) {
           }
         } else {
           const text = part.trim();
-          if (/^\d{4}$/.test(text) && !meta.birthDate) {
-            meta.birthDate = text;
-          } else if (/^\d{4}-\d{4}$/.test(text)) {
-            const years = text.split('-');
-            meta.birthDate = years[0];
-            meta.deathDate = years[1];
-          }
+          const dates = extractDates(text);
+          if (dates.birthDate && !meta.birthDate) meta.birthDate = dates.birthDate;
+          if (dates.deathDate && !meta.deathDate) meta.deathDate = dates.deathDate;
         }
       });
     }
@@ -217,7 +280,13 @@ function maskBracketed(text) {
     if (depthRound > 0 || depthSquare > 0) chars[i] = '';
   }
 
-  return chars.join('');
+  // Maschera anche le date scritte fuori parentesi, così un intervallo come
+  // "Mario Rossi 1862 - 1909" non venga scambiato per una coppia.
+  const masked = chars.join('');
+  return masked.replace(
+    new RegExp(`(?:${DATE_TOKEN})(?:${RANGE_SEP}(?:${DATE_TOKEN}))?`, 'g'),
+    (m) => '\u0001'.repeat(m.length)
+  );
 }
 
 const hasLetters = (s) => /[\p{L}]/u.test(s || '');

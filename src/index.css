@@ -1165,3 +1165,336 @@ select.form-control {
   padding-left: 16px;
   margin-top: 6px;
 }
+
+/* ============================================================
+   Popup Compleanni
+   ============================================================ */
+.birthday-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.birthday-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.birthday-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.birthday-chip {
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-muted);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 0.8rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.birthday-chip:hover {
+  border-color: var(--border-color-hover);
+  color: var(--text-main);
+}
+
+.birthday-chip.active {
+  background: rgba(245, 166, 35, 0.15);
+  border-color: rgba(245, 166, 35, 0.5);
+  color: var(--accent-amber);
+  font-weight: 600;
+}
+
+.birthday-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.birthday-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.02);
+  transition: all var(--transition-fast);
+}
+
+.birthday-item:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--border-color-hover);
+}
+
+.birthday-item.today {
+  border-color: rgba(245, 166, 35, 0.5);
+  background: rgba(245, 166, 35, 0.08);
+  box-shadow: 0 0 14px rgba(245, 166, 35, 0.15);
+}
+
+.birthday-badge {
+  min-width: 58px;
+  text-align: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+}
+
+.birthday-badge.today {
+  background: var(--accent-amber);
+  color: var(--text-inverse);
+}
+
+.birthday-item .node-avatar {
+  width: 36px;
+  height: 36px;
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}
+
+.birthday-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.birthday-name {
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-main);
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+
+.birthday-name:hover {
+  color: var(--accent-teal);
+}
+
+.birthday-meta {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.birthday-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.birthday-actions .btn {
+  padding: 6px 10px;
+  font-size: 0.78rem;
+}
+
+.birthday-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 32px 16px;
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .birthday-item {
+    flex-wrap: wrap;
+  }
+  .birthday-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+
+/* ============================================================
+   Sezione clinica / rischio ereditario (visibilità riservata)
+   ============================================================ */
+.btn-clinical-on {
+  background: rgba(138, 43, 226, 0.18);
+  border: 1px solid rgba(138, 43, 226, 0.55);
+  color: #d8b4fe;
+}
+
+.btn-clinical-on:hover {
+  background: rgba(138, 43, 226, 0.3);
+}
+
+.clinical-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(138, 43, 226, 0.18);
+  border: 1px solid rgba(138, 43, 226, 0.45);
+  color: #d8b4fe;
+}
+
+.clinical-modal {
+  max-width: 720px;
+}
+
+.clinical-disclaimer {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px 24px;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: #fde047;
+  background: rgba(245, 166, 35, 0.1);
+  border-bottom: 1px solid rgba(245, 166, 35, 0.25);
+}
+
+.clinical-mode-switch {
+  display: flex;
+  gap: 8px;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--border-color);
+  flex-wrap: wrap;
+}
+
+.clinical-mode-switch .birthday-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.risk-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.risk-item {
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.risk-item-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
+  color: var(--text-main);
+}
+
+.risk-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  flex: 1;
+  text-align: left;
+}
+
+.risk-score {
+  font-size: 1.05rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.risk-score small {
+  font-size: 0.7rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.risk-band {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.risk-band.band-basso { background: rgba(16, 185, 129, 0.15); color: var(--accent-emerald); }
+.risk-band.band-moderato { background: rgba(245, 166, 35, 0.15); color: var(--accent-amber); }
+.risk-band.band-alto { background: rgba(244, 63, 94, 0.15); color: var(--accent-rose); }
+.risk-band.band-molto-alto { background: rgba(244, 63, 94, 0.28); color: #fda4af; }
+
+.risk-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+  margin: 10px 0 6px;
+}
+
+.risk-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width var(--transition-normal);
+}
+
+.risk-bar-fill.band-basso { background: var(--accent-emerald); }
+.risk-bar-fill.band-moderato { background: var(--accent-amber); }
+.risk-bar-fill.band-alto { background: var(--accent-rose); }
+.risk-bar-fill.band-molto-alto { background: linear-gradient(90deg, var(--accent-rose), var(--accent-pink)); }
+
+.risk-affected-count {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}
+
+.risk-affected-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 10px 0 0;
+  border-top: 1px dashed var(--border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.risk-affected-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.risk-affected-meta {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.birthday-modal .modal-body,
+.clinical-modal .modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}

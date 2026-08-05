@@ -51,7 +51,9 @@ export default function GenealogyTree({
   onAddRelative,
   canEdit,
   highlightedPersonId,
-  onDeletePeople
+  onDeletePeople,
+  // Le informazioni sanitarie hanno una visibilità separata dall'albero ufficiale.
+  healthVisible = false
 }) {
   const [positions, setPositions] = useState({});
   const [draggedNode, setDraggedNode] = useState(null);
@@ -62,7 +64,6 @@ export default function GenealogyTree({
   const manualPositionsRef = useRef(manualPositionsByModeRef.current.organigram);
   // Nodi selezionati per multi-select
   const [selectedPeople, setSelectedPeople] = useState(new Set());
-  const [includeSingleNodesInReset, setIncludeSingleNodesInReset] = useState(false);
   const [layoutMode, setLayoutMode] = useState('organigram');
 
   // Stati per Pan & Zoom
@@ -90,17 +91,6 @@ export default function GenealogyTree({
     const uHash = unions ? unions.map(u => `${u.id}:${u.partner1_id || ''}:${u.partner2_id || ''}:${u.children_ids?.join(',') || ''}`).join('|') : '';
     return [pHash, uHash].join('||');
   }, [people, unions]);
-
-  const coupledPersonIds = useMemo(() => {
-    const ids = new Set();
-    unions.forEach(union => {
-      if (union.partner1_id && union.partner2_id) {
-        ids.add(union.partner1_id);
-        ids.add(union.partner2_id);
-      }
-    });
-    return ids;
-  }, [unions]);
 
   const tableRows = useMemo(() => {
     const peopleById = new Map(people.map(person => [person.id, person]));
@@ -812,16 +802,9 @@ export default function GenealogyTree({
     hasCenteredRef.current = false;
     setLayoutMode(nextMode);
   };
+  // Il reset riporta SEMPRE tutti i nodi (coppie e singoli) alla posizione calcolata.
   const resetNodePositions = () => {
-    if (includeSingleNodesInReset) {
-      manualPositionsRef.current = {};
-    } else {
-      const positionsToKeep = { ...manualPositionsRef.current };
-      coupledPersonIds.forEach(personId => {
-        delete positionsToKeep[personId];
-      });
-      manualPositionsRef.current = positionsToKeep;
-    }
+    manualPositionsRef.current = {};
     manualPositionsByModeRef.current[layoutMode] = manualPositionsRef.current;
 
     // Forza il ricalcolo anche se i dati genealogici non sono cambiati.
@@ -1068,20 +1051,10 @@ export default function GenealogyTree({
           <button
             className="btn btn-secondary btn-sm"
             onClick={resetNodePositions}
-            title={includeSingleNodesInReset
-              ? 'Ripristina la posizione di tutti i nodi'
-              : 'Ripristina la posizione dei nodi appartenenti a coppie'}
+            title="Ripristina la posizione di tutti i nodi"
           >
             <RefreshCw size={15} /> Reset posizioni
           </button>
-          <label className="hud-checkbox-option" title="Includi nel reset anche le persone senza partner">
-            <input
-              type="checkbox"
-              checked={includeSingleNodesInReset}
-              onChange={(e) => setIncludeSingleNodesInReset(e.target.checked)}
-            />
-            <span>Anche singoli</span>
-          </label>
         </div>}
         {layoutMode !== 'table' && <div className="hud-panel glass hud-vertical">
           <button className="btn-icon" onClick={zoomIn} title="Zoom In">
@@ -1152,9 +1125,9 @@ export default function GenealogyTree({
                     <td>{children || '—'}</td>
                     <td>
                       <div className="table-info-badges">
-                        {person.illnesses?.length > 0 && <span>Salute: {person.illnesses.length}</span>}
+                        {healthVisible && person.illnesses?.length > 0 && <span>Salute: {person.illnesses.length}</span>}
                         {person.notes && <span>Note</span>}
-                        {!person.illnesses?.length && !person.notes && <span className="muted">—</span>}
+                        {!(healthVisible && person.illnesses?.length) && !person.notes && <span className="muted">—</span>}
                       </div>
                     </td>
                   </tr>
@@ -1205,6 +1178,7 @@ export default function GenealogyTree({
                   }}
                   onAddRelative={(relation) => onAddRelative(person, relation)}
                   canEdit={canEdit}
+                  healthVisible={healthVisible}
                 />
               </div>
             );
