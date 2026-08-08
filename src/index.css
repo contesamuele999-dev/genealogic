@@ -79,7 +79,9 @@ body {
   color: var(--text-main);
   overflow: hidden;
   height: 100vh;
+  height: 100dvh; /* su mobile la barra del browser mangia il 100vh */
   width: 100vw;
+  overscroll-behavior: none;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -125,6 +127,7 @@ button, input, select, textarea {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh;
   width: 100vw;
   position: relative;
   background-color: var(--bg-app);
@@ -132,13 +135,20 @@ button, input, select, textarea {
 
 /* Header */
 .app-header {
+  position: relative; /* ancora il pannello azioni a scomparsa su mobile */
   height: 64px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 24px;
+  padding-top: env(safe-area-inset-top);
   z-index: 100;
   border-bottom: 1px solid var(--border-color);
+}
+
+/* Su desktop il menu è sempre aperto: il pulsante serve solo sotto i 900px */
+.menu-toggle {
+  display: none;
 }
 
 .logo-section {
@@ -232,6 +242,8 @@ button, input, select, textarea {
   flex: 1;
   position: relative;
   overflow: hidden;
+  /* Pan e pinch li gestisce l'app: il browser non deve scrollare né zoomare */
+  touch-action: none;
   background-color: var(--bg-canvas);
   background-image: radial-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 0);
   background-size: 24px 24px;
@@ -1706,4 +1718,282 @@ select.form-control {
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* ============================================================
+   Testi legali, onboarding e installazione PWA
+   ============================================================ */
+.link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-teal);
+  font-size: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.legal-links {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.legal-body section {
+  margin-bottom: 16px;
+}
+
+.legal-body h4 {
+  margin-bottom: 6px;
+  color: var(--accent-teal);
+  font-size: 0.92rem;
+}
+
+.legal-body p {
+  margin-bottom: 6px;
+  color: var(--text-muted);
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.legal-updated {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-style: italic;
+}
+
+.onboarding-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  line-height: 1.5;
+}
+
+.onboarding-install {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(0, 242, 254, 0.35);
+  border-radius: 12px;
+  background: rgba(0, 242, 254, 0.06);
+  font-size: 0.88rem;
+}
+
+.onboarding-legal {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+/* ============================================================
+   Tablet
+   ============================================================ */
+@media (min-width: 901px) and (max-width: 1200px) {
+  .genealogy-table-view {
+    padding: 20px 200px 20px 20px;
+  }
+}
+
+/* ============================================================
+   Tablet e telefono: header a scomparsa dietro il pulsante menu
+   ============================================================ */
+@media (max-width: 1200px) {
+  .app-header {
+    height: auto;
+    min-height: 56px;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 8px;
+    padding: 8px 12px;
+    padding-top: calc(8px + env(safe-area-inset-top));
+  }
+
+  .logo-section {
+    flex: 1;
+    min-width: 0;
+    font-size: 1rem;
+  }
+
+  .logo-section span {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .menu-toggle {
+    display: flex;
+    order: 2;
+    width: 44px;
+    height: 44px;
+  }
+
+  .tree-select-wrapper {
+    order: 3;
+    width: 100%;
+  }
+
+  .tree-select {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .search-container,
+  .search-input:focus {
+    order: 4;
+    width: 100%;
+  }
+
+  .search-results-dropdown {
+    left: 0;
+    right: 0;
+    width: auto;
+  }
+
+  /* Pannello azioni: chiuso di default, si apre col pulsante menu */
+  .header-actions {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 120;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    max-height: 70dvh;
+    overflow-y: auto;
+    padding: 12px;
+    background: var(--bg-popover);
+    border-bottom: 1px solid var(--border-color);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .header-actions.open {
+    display: flex;
+  }
+
+  .header-actions .btn {
+    width: 100%;
+    justify-content: flex-start;
+    padding: 12px 14px;
+  }
+
+  .legal-links {
+    justify-content: center;
+    padding-top: 4px;
+  }
+}
+
+/* ============================================================
+   Telefono: modali a scheda, HUD compatto, campi a prova di zoom iOS
+   ============================================================ */
+@media (max-width: 900px) {
+  /* Evita lo zoom automatico di iOS sui campi con testo sotto i 16px */
+  .form-control,
+  .search-input,
+  .tree-select {
+    font-size: 16px;
+  }
+
+  /* Modali come schede dal basso */
+  .modal-overlay {
+    align-items: flex-end;
+  }
+
+  .modal-container,
+  .modal-container.large {
+    width: 100%;
+    max-width: 100%;
+    max-height: 92dvh;
+    display: flex;
+    flex-direction: column;
+    border-radius: 20px 20px 0 0;
+  }
+
+  .modal-header {
+    padding: 14px 16px;
+  }
+
+  .modal-body {
+    flex: 1;
+    max-height: none;
+    padding: 16px;
+  }
+
+  .modal-footer {
+    flex-wrap: wrap;
+    padding: 12px 16px;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+
+  .modal-footer .btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  /* HUD del canvas */
+  .canvas-hud {
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    align-items: flex-end;
+    gap: 6px;
+  }
+
+  .layout-mode-panel .form-control {
+    min-width: 140px;
+  }
+
+  .canvas-hud .btn-icon {
+    width: 44px;
+    height: 44px;
+  }
+
+  .side-panel {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    max-height: 60dvh;
+    border-radius: 16px 16px 0 0;
+  }
+
+  .genealogy-table-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+}
+
+/* La tabella scorre normalmente: il blocco touch vale solo per il canvas */
+.genealogy-table-view,
+.genealogy-table-scroll {
+  touch-action: pan-x pan-y;
+}
+
+/* ============================================================
+   Dispositivi senza mouse: niente stati hover irraggiungibili
+   ============================================================ */
+@media (hover: none) {
+  .quick-actions {
+    opacity: 1;
+    transform: translateX(-50%) scale(1);
+    pointer-events: auto;
+  }
+
+  .btn-quick-add {
+    width: 30px;
+    height: 30px;
+  }
+
+  .node-card:hover {
+    transform: none;
+  }
+
+  .btn-icon {
+    min-width: 40px;
+    min-height: 40px;
+  }
 }

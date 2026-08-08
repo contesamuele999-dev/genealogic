@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Network, Plus, ShieldAlert, LogIn, LogOut, Settings, Upload, AlertCircle, Cake, Share2, Check, Dna, Eye, EyeOff, GitMerge, Link2 } from 'lucide-react';
+import { Network, Plus, ShieldAlert, LogIn, LogOut, Settings, Upload, AlertCircle, Cake, Share2, Check, Dna, Eye, EyeOff, GitMerge, Link2, Menu, X } from 'lucide-react';
 import { storage } from './services/storage';
 import { generateUUID } from './services/xmindParser';
 import { getUpcomingBirthdays } from './services/birthdayService';
@@ -17,6 +17,8 @@ import BirthdayModal from './components/BirthdayModal';
 import ChangeRequestsModal from './components/ChangeRequestsModal';
 import GeneticRiskModal from './components/GeneticRiskModal';
 import TreeLinksModal from './components/TreeLinksModal';
+import OnboardingModal, { hasSeenOnboarding } from './components/OnboardingModal';
+import LegalModal from './components/LegalModal';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
@@ -45,6 +47,12 @@ export default function App() {
   const [showChangeRequests, setShowChangeRequests] = useState(false);
   const [showGeneticRisk, setShowGeneticRisk] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
+
+  // Menu delle azioni: su telefono e tablet l'header collassa in un pannello a scomparsa.
+  const [menuOpen, setMenuOpen] = useState(false);
+  // Popup dei primi accessi (installazione PWA + accettazione informative) e testi legali.
+  const [showOnboarding, setShowOnboarding] = useState(() => !hasSeenOnboarding());
+  const [legalDoc, setLegalDoc] = useState(null);
 
   // "Modalità clinica": le informazioni sanitarie e il calcolo del rischio ereditario
   // hanno una visibilità distinta dall'albero ufficiale. Sono accessibili solo a chi
@@ -457,6 +465,16 @@ export default function App() {
           <span>Genealogia di Famiglia</span>
         </div>
 
+        {/* Apertura del pannello azioni: visibile solo sotto i 900px */}
+        <button
+          className="btn-icon menu-toggle"
+          onClick={() => setMenuOpen(open => !open)}
+          aria-expanded={menuOpen}
+          aria-label={menuOpen ? 'Chiudi menu' : 'Apri menu'}
+        >
+          {menuOpen ? <X size={20} /> : <Menu size={20} />}
+        </button>
+
         {trees.length > 0 && (
           <div className="tree-select-wrapper">
             <select
@@ -492,7 +510,10 @@ export default function App() {
         )}
 
         {/* Azioni Utente e Pannelli */}
-        <div className="header-actions">
+        <div
+          className={`header-actions ${menuOpen ? 'open' : ''}`}
+          onClick={() => setMenuOpen(false)}
+        >
           {activeTreeId && (
             <button className="btn btn-secondary flex-align gap-6" onClick={handleShareTree} title="Copia il link di questo albero">
               {shareCopied ? <Check size={16} /> : <Share2 size={16} />}
@@ -610,6 +631,12 @@ export default function App() {
               <LogIn size={16} /> Accedi / Registrati
             </button>
           )}
+
+          <div className="legal-links">
+            <button className="link-button" onClick={() => setLegalDoc('privacy')}>Privacy</button>
+            <span aria-hidden="true">·</span>
+            <button className="link-button" onClick={() => setLegalDoc('terms')}>Termini</button>
+          </div>
         </div>
       </header>
 
@@ -760,6 +787,14 @@ export default function App() {
       {showChangeRequests && activeTreeId && (
         <ChangeRequestsModal treeId={activeTreeId} onClose={() => setShowChangeRequests(false)} onReviewed={loadTreeDetails} />
       )}
+
+      {showOnboarding && (
+        <OnboardingModal
+          onClose={() => setShowOnboarding(false)}
+          onOpenLegal={setLegalDoc}
+        />
+      )}
+      {legalDoc && <LegalModal doc={legalDoc} onClose={() => setLegalDoc(null)} />}
     </div>
   );
 }

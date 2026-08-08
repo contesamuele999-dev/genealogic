@@ -1,0 +1,19 @@
+{
+  "name": "Genealogia di Famiglia",
+  "short_name": "Genealogia",
+  "description": "Consulta, crea e modifica gli alberi genealogici della tua famiglia.",
+  "lang": "it",
+  "start_url": "/ugene/",
+  "scope": "/ugene/",
+  "id": "/ugene/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#080a0f",
+  "theme_color": "#080a0f",
+  "categories": ["lifestyle", "productivity"],
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

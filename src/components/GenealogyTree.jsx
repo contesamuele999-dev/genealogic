@@ -697,9 +697,34 @@ export default function GenealogyTree({
     positionsRef.current = positions;
   }, [positions]);
 
+  // Puntatori attivi sul canvas: mouse, dito o penna passano tutti da qui.
+  // Con due dita si entra in modalità pinch (zoom) e pan e drag vengono sospesi.
+  const pointersRef = useRef(new Map());
+  const pinchRef = useRef(null);
+
+  const pointerDistance = () => {
+    const [a, b] = [...pointersRef.current.values()];
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  };
+  const pointerMidpoint = () => {
+    const [a, b] = [...pointersRef.current.values()];
+    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  };
+
   // Gestione del Pan (trascinamento dello sfondo)
-  const handleMouseDown = (e) => {
+  const handlePointerDown = (e) => {
     if (layoutMode === 'table') return;
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (pointersRef.current.size === 2) {
+      // Secondo dito: si passa al pinch, annullando pan e trascinamento in corso.
+      pinchRef.current = { distance: pointerDistance() };
+      setIsPanning(false);
+      dragRef.current = null;
+      setDraggedNode(null);
+      return;
+    }
+
     if (e.target.closest('.node-card') || e.target.closest('.btn') || e.target.closest('.btn-quick-add') || e.target.closest('.couple-connector')) return;
     setIsPanning(true);
     setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
@@ -710,7 +735,23 @@ export default function GenealogyTree({
   // Soglia (in pixel schermo) oltre la quale il movimento è considerato un drag e non un click
   const DRAG_THRESHOLD = 4;
 
-  const handleMouseMove = (e) => {
+  const handlePointerMove = (e) => {
+    if (pointersRef.current.has(e.pointerId)) {
+      pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+
+    // Pinch a due dita: zoom ancorato al punto medio fra i due tocchi.
+    if (pinchRef.current && pointersRef.current.size === 2) {
+      const distance = pointerDistance();
+      if (distance > 0 && pinchRef.current.distance > 0) {
+        const rect = wrapperRef.current.getBoundingClientRect();
+        const mid = pointerMidpoint();
+        applyZoom(zoom * (distance / pinchRef.current.distance), mid.x - rect.left, mid.y - rect.top);
+      }
+      pinchRef.current.distance = distance;
+      return;
+    }
+
     if (isPanning) {
       setPan({
         x: e.clientX - panStart.x,
@@ -745,7 +786,18 @@ export default function GenealogyTree({
     }));
   };
 
-  const handleMouseUp = () => {
+  const handlePointerUp = (e) => {
+    if (e) pointersRef.current.delete(e.pointerId);
+    if (pointersRef.current.size < 2) pinchRef.current = null;
+    setIsPanning(false);
+    dragRef.current = null;
+    setDraggedNode(null);
+  };
+
+  // Il puntatore esce dal canvas: chiude tutto e azzera i tocchi residui.
+  const handlePointerLeave = () => {
+    pointersRef.current.clear();
+    pinchRef.current = null;
     setIsPanning(false);
     dragRef.current = null;
     setDraggedNode(null);
@@ -819,8 +871,10 @@ export default function GenealogyTree({
 
   // Mousedown su un nodo: gestisce selezione multipla (Shift) e avvio del drag.
   // Un solo handler evita che il pan dello sfondo parta contemporaneamente al drag della card.
-  const handleNodeMouseDown = (personId, e) => {
+  const handleNodePointerDown = (personId, e) => {
     if (e.button !== 0) return;
+    // Un dito è già appoggiato: è l'inizio di un pinch, lo gestisce il canvas.
+    if (pointersRef.current.size > 0) return;
     // Non interferire con i pulsanti interni alla card (quick add, menu...)
     if (e.target.closest('button')) return;
 
@@ -1039,15 +1093,16 @@ export default function GenealogyTree({
     <div
       ref={wrapperRef}
       className={`canvas-wrapper ${draggedNode || isPanning ? 'is-dragging' : ''}`}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
+      onPointerLeave={handlePointerLeave}
       onWheel={handleWheel}
     >
       {/* HUD Controls */}
       <div className="canvas-hud">
-        <div className="hud-panel glass layout-mode-panel" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="hud-panel glass layout-mode-panel" onPointerDown={(e) => e.stopPropagation()}>
           <label htmlFor="tree-layout-mode">Visualizzazione</label>
           <select
             id="tree-layout-mode"
@@ -1060,7 +1115,7 @@ export default function GenealogyTree({
             ))}
           </select>
         </div>
-        {layoutMode !== 'table' && <div className="hud-panel glass reset-positions-panel" onMouseDown={(e) => e.stopPropagation()}>
+        {layoutMode !== 'table' && <div className="hud-panel glass reset-positions-panel" onPointerDown={(e) => e.stopPropagation()}>
           <button
             className="btn btn-secondary btn-sm"
             onClick={resetNodePositions}
@@ -1093,7 +1148,7 @@ export default function GenealogyTree({
       </div>
 
       {layoutMode === 'table' ? (
-        <div className="genealogy-table-view" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="genealogy-table-view" onPointerDown={(e) => e.stopPropagation()}>
           <div className="genealogy-table-header">
             <div>
               <h3>Persone dell’albero</h3>
@@ -1179,7 +1234,7 @@ export default function GenealogyTree({
                   left: `${pos.x}px`,
                   top: `${pos.y}px`,
                 }}
-                onMouseDown={(e) => handleNodeMouseDown(person.id, e)}
+                onPointerDown={(e) => handleNodePointerDown(person.id, e)}
               >
                 <NodeCard
                   person={person}
